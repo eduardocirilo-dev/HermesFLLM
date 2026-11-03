@@ -1352,7 +1352,9 @@
     "reserveTitle": "Reserva aquecida",
     "noReserve": "Ainda sem reserva: os modelos precisam de 5 pedidos em 24h.",
     "notProbed": "ainda não testado",
-    "lastRound": "Última rodada há {ago}"
+    "lastRound": "Última rodada há {ago}",
+    "agentProbe": "Cada teste é uma tool call real, verificada pelo Agent Guard",
+    "agentTested": "testado como agente"
   },
   "build": {
     "updated": "atualizado"

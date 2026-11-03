@@ -6,12 +6,14 @@
 //    in priority order: models that just failed real traffic, models currently excluded (to see
 //    if they recovered), the warm reserve (the most reliable models the router fails over to),
 //    then whatever has gone longest without a probe. A daily cap per platform protects free quota.
+//    Each probe is an agent probe: one real tool call, validated by the Agent Guard.
 // 3. A failure in live traffic queues that model for a probe within seconds, not hours.
 // 4. routeRequest skips a model whose fresh probes all failed (isCuratedOut). Verdicts expire
 //    after HERMESFLLM_CURATION_VERDICT_TTL_MS (1h), so a recovered model comes back quickly.
 import { getDb, getSetting, setSetting } from '../db/index.js';
 import type { Scheduler } from '../lib/scheduler.js';
-import { probeModel, recordProbeResult, selectProbeCandidates, type ProbeCandidate, type ModelProbeRequestDeps, type ProbeOutcome } from './model-probe.js';
+import { probeModel, probeRequest, recordProbeResult, selectProbeCandidates, type ProbeCandidate, type ModelProbeRequestDeps, type ProbeOutcome } from './model-probe.js';
+import { agentGuardReasons } from '../lib/tool-validate.js';
 
 export const CURATION_INTERVAL_MS = positiveInt(process.env.HERMESFLLM_CURATION_INTERVAL_MS, 10 * 60 * 1000);
 export const CURATION_MAX_PROBES = positiveInt(process.env.HERMESFLLM_CURATION_MAX_PROBES, 4);
@@ -126,7 +128,7 @@ function candidateForModel(modelDbId: number): (ProbeCandidate & { lastProbedAt:
      LEFT JOIN model_probe_status p
             ON p.platform = m.platform AND p.model_id = m.model_id
            AND p.endpoint_scope = m.endpoint_scope AND p.key_id = k.id
-     WHERE m.id = ? AND m.enabled = 1
+     WHERE m.id = ? AND m.enabled = 1 AND m.supports_tools = 1
      ORDER BY (p.last_probed_at IS NULL) DESC, p.last_probed_at ASC, k.id ASC
      LIMIT 1
   `).get(modelDbId) as (ProbeCandidate & { lastProbedAt: string }) | undefined;
@@ -217,6 +219,52 @@ export function selectCurationCandidates(limit = CURATION_MAX_PROBES, now = Date
   return out;
 }
 
+// ── Agent probe ──────────────────────────────────────────────────────────────
+// "Reply with OK" proves a model answers, not that it can drive an agent. The curation probe
+// gives the model one tool and asks for it; the reply must carry a tool call the Agent Guard
+// accepts (declared name, JSON-object arguments matching the schema). A model that answers in
+// prose, invents a tool or emits broken arguments is recorded 'unavailable' and leaves routing
+// until a later probe passes. Hermes always sends tools, so this is the bar that matters.
+
+export const AGENT_PROBE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'get_weather',
+    description: 'Get the current weather for a city.',
+    parameters: {
+      type: 'object',
+      properties: { city: { type: 'string', description: 'City name' } },
+      required: ['city'],
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+const AGENT_PROBE_MESSAGES = [
+  { role: 'system', content: 'You are an agent. Use the provided tools to answer.' },
+  { role: 'user', content: 'What is the weather in Lisbon right now? Use the tool.' },
+];
+
+/** Throws (→ 'unavailable') unless the reply carries one valid call to the probe tool. */
+export function assertAgentProbeReply(reply: any): void {
+  const calls = reply?.choices?.[0]?.message?.tool_calls;
+  if (!Array.isArray(calls) || calls.length === 0) {
+    const text = String(reply?.choices?.[0]?.message?.content ?? '').trim().slice(0, 80);
+    throw new Error(`no valid tool call: answered without calling a tool${text ? ` ("${text}")` : ''}`);
+  }
+  const reasons = agentGuardReasons(calls, [AGENT_PROBE_TOOL as any]);
+  if (reasons.length > 0) throw new Error(`no valid tool call: ${reasons.slice(0, 2).join('; ')}`);
+}
+
+async function agentProbeChat(candidate: ProbeCandidate): Promise<void> {
+  const reply = await probeRequest(candidate, AGENT_PROBE_MESSAGES, {
+    tools: [AGENT_PROBE_TOOL],
+    tool_choice: 'auto',
+    max_tokens: 256,
+  });
+  assertAgentProbeReply(reply);
+}
+
 // ── Rounds ───────────────────────────────────────────────────────────────────
 
 export interface CurationRound {
@@ -236,7 +284,7 @@ export async function runCurationRound(deps: ModelProbeRequestDeps = {}, now = D
     const results: CurationRound['results'] = [];
     for (const c of candidates) {
       countProbe(c.platform, now);
-      const outcome = await probeModel(c, deps);
+      const outcome = await probeModel(c, { chat: deps.chat ?? agentProbeChat });
       recordProbeResult(getDb(), c, outcome);
       // Answered or truly down: either way the urgent question is settled.
       if (outcome.status !== 'error') urgentQueue.delete(c.modelDbId);

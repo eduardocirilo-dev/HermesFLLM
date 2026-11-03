@@ -165,6 +165,9 @@ export default function HealthBoardPage() {
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <p className="text-4xl font-semibold tabular-nums">{data.curation.probesToday}</p>
+                <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  <ShieldCheck className="h-3.5 w-3.5" />{t('healthBoard.agentProbe')}
+                </p>
                 <p className="text-muted-foreground">
                   {t('healthBoard.probesToday', { next: formatCountdown(data.curation.nextRoundAt, now) ?? '—', max: data.curation.maxProbesPerRound, every: data.curation.intervalMinutes })}
                 </p>
@@ -235,7 +238,10 @@ export default function HealthBoardPage() {
 
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base"><Flame className="h-4 w-4 text-orange-500" />{t('healthBoard.reserveTitle')}</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Flame className="h-4 w-4 text-orange-500" />{t('healthBoard.reserveTitle')}
+                    <Badge variant="outline" className="ml-auto gap-1 text-[10px]"><ShieldCheck className="h-3 w-3" />{t('healthBoard.agentTested')}</Badge>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   {data.curation.reserve.length === 0 ? (

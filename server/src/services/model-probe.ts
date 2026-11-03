@@ -145,6 +145,14 @@ export interface ModelProbeRequestDeps {
 }
 
 async function probeChat(candidate: ProbeCandidate): Promise<void> {
+  await probeRequest(candidate, [{ role: 'user', content: 'Reply with OK' }]);
+}
+
+/**
+ * One probe request through the key's own adapter, proxy and quota accounting. Exported so
+ * HermesFLLM curation can send an agent-shaped probe (a real tool call) down the same path.
+ */
+export async function probeRequest(candidate: ProbeCandidate, messages: Array<{ role: string; content: string }>, extra: Record<string, unknown> = {}): Promise<any> {
   const db = getDb();
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ? AND enabled = 1').get(candidate.keyId) as any;
   if (!row) throw new Error('key not found or disabled');
@@ -155,11 +163,10 @@ async function probeChat(candidate: ProbeCandidate): Promise<void> {
   // Same reasoning as checkKeyHealth (#590): probe through the key's own proxy,
   // or a key only reachable via its proxy would fail the probe while real
   // traffic through the proxy works fine.
-  await withKeyProxy(decryptProxyUrl(row), () => provider.chatCompletion(apiKey, [
-    { role: 'user', content: 'Reply with OK' },
-  ], candidate.modelId, {
+  return withKeyProxy(decryptProxyUrl(row), () => provider.chatCompletion(apiKey, messages as any, candidate.modelId, {
     max_tokens: PROBE_MAX_TOKENS,
     timeoutMs: PROBE_TIMEOUT_MS,
+    ...extra,
   } as any, {
     platform: candidate.platform as any,
     keyId: candidate.keyId,
@@ -208,15 +215,16 @@ export function recordProbeResult(db: Db, candidate: ProbeCandidate, outcome: Pr
   }
   db.prepare(`
     INSERT INTO model_probe_status (platform, model_id, endpoint_scope, key_id, status, last_probed_at, last_error, latency_ms)
-    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(platform, model_id, endpoint_scope, key_id) DO UPDATE SET
       status = excluded.status,
       last_probed_at = excluded.last_probed_at,
-      last_error = NULL,
+      last_error = excluded.last_error,
       latency_ms = excluded.latency_ms
   `).run(
     candidate.platform, candidate.modelId, candidate.endpointScope, candidate.keyId,
-    outcome.status, probedAt.toISOString(), outcome.latencyMs ?? null,
+    // Keep WHY a model is unavailable (shown on the health board); a working verdict clears it.
+    outcome.status, probedAt.toISOString(), outcome.status === 'unavailable' ? (outcome.error ?? null) : null, outcome.latencyMs ?? null,
   );
 }
 

@@ -25,8 +25,8 @@ beforeEach(() => {
   db.prepare(`INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, status, enabled)
               VALUES (1, 'p', '', '', '', '', 'healthy', 1)`).run();
   for (let id = 1; id <= 8; id++) {
-    db.prepare(`INSERT INTO models (id, platform, model_id, display_name, intelligence_rank, speed_rank, endpoint_scope, enabled)
-                VALUES (?, 'p', ?, ?, 0, 0, '', 1)`).run(id, `m${id}`, `m${id}`);
+    db.prepare(`INSERT INTO models (id, platform, model_id, display_name, intelligence_rank, speed_rank, endpoint_scope, enabled, supports_tools)
+                VALUES (?, 'p', ?, ?, 0, 0, '', 1, 1)`).run(id, `m${id}`, `m${id}`);
   }
 });
 
@@ -134,5 +134,38 @@ describe('latency ceiling', () => {
     resetCurationCache();
     expect(isTooSlow(3)).toBe(false);
     expect(isTooSlow(4)).toBe(false);
+  });
+});
+
+import { assertAgentProbeReply } from '../../services/curation.js';
+
+describe('agent probe', () => {
+  const reply = (message: any) => ({ choices: [{ message }] });
+  const call = (name: string, args: string) => ({ id: 'c1', type: 'function', function: { name, arguments: args } });
+
+  it('accepts one valid call to the probe tool', () => {
+    expect(() => assertAgentProbeReply(reply({ tool_calls: [call('get_weather', '{"city":"Lisbon"}')] }))).not.toThrow();
+  });
+
+  it('rejects a prose answer, an invented tool and broken arguments', () => {
+    expect(() => assertAgentProbeReply(reply({ content: 'It is sunny in Lisbon.' }))).toThrow(/no valid tool call: answered without calling a tool/);
+    expect(() => assertAgentProbeReply(reply({ tool_calls: [call('search_web', '{}')] }))).toThrow(/not a declared tool/);
+    expect(() => assertAgentProbeReply(reply({ tool_calls: [call('get_weather', '{"city": ')] }))).toThrow(/not valid JSON/);
+    expect(() => assertAgentProbeReply(reply({ tool_calls: [call('get_weather', '{"town":"Lisbon"}')] }))).toThrow(/no valid tool call/);
+  });
+
+  it('only probes models that declare tool support', () => {
+    getDb().prepare('UPDATE models SET supports_tools = 0 WHERE id = 1').run();
+    const picked = selectCurationCandidates(8).map(c => c.modelId);
+    expect(picked).not.toContain('m1');
+  });
+
+  it('a round records a prose-only model as unavailable with the reason', async () => {
+    const round = await runCurationRound({
+      chat: async c => { if (c.modelId === 'm2') throw new Error('no valid tool call: answered without calling a tool'); },
+    });
+    expect(round?.results.find(r => r.modelId === 'm2')?.status).toBe('unavailable');
+    const row = getDb().prepare(`SELECT last_error FROM model_probe_status WHERE model_id = 'm2'`).get() as { last_error: string };
+    expect(row.last_error).toMatch(/no valid tool call/);
   });
 });
