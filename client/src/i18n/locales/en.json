@@ -1353,7 +1353,7 @@
     "noReserve": "No reserve yet: models need 5 requests in 24h.",
     "notProbed": "not probed yet",
     "lastRound": "Last round {ago} ago",
-    "agentProbe": "Every probe is a real tool call checked by the Agent Guard",
+    "agentProbe": "Every probe is a short agent task: two tools, and the answer must use their results",
     "agentTested": "agent-tested",
     "raceTitle": "First-token race",
     "raceRescued": "turns a backup model answered first (since restart {since} ago)",

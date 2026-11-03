@@ -191,6 +191,66 @@ describe('agent probe', () => {
   });
 });
 
+import { runAgentProbe, answerUsesProbeResults } from '../../services/curation.js';
+
+describe('agent probe task (two tools, answer from the results)', () => {
+  const call = (id: string, name: string) => ({ id, type: 'function', function: { name, arguments: '{"city":"Lisbon"}' } });
+  const tools = (...calls: any[]) => ({ choices: [{ message: { content: null, tool_calls: calls } }] });
+  const text = (content: string) => ({ choices: [{ message: { content } }] });
+  /** A fake model that plays back `replies` and records every conversation it was sent. */
+  function model(...replies: any[]) {
+    const sent: any[][] = [];
+    return { sent, send: async (messages: any[]) => { sent.push(structuredClone(messages)); return replies[sent.length - 1]; } };
+  }
+  const GOOD = 'In Lisbon it is 17.3°C with light rain, and the local time is 14:52.';
+
+  it('passes a model that calls both tools at once and answers from their results', async () => {
+    const m = model(tools(call('a', 'get_weather'), call('b', 'get_time')), text(GOOD));
+    await expect(runAgentProbe(m.send)).resolves.toBeUndefined();
+    // The second request carries both results, paired to their calls.
+    const tail = m.sent[1].slice(-2);
+    expect(tail.map((t: any) => t.tool_call_id)).toEqual(['a', 'b']);
+    expect(tail[0].content).toContain('17.3');
+    expect(tail[1].content).toContain('14:52');
+  });
+
+  it('passes a model that calls the tools one after the other', async () => {
+    const m = model(tools(call('a', 'get_weather')), tools(call('b', 'get_time')), text(GOOD));
+    await expect(runAgentProbe(m.send)).resolves.toBeUndefined();
+    expect(m.sent).toHaveLength(3);
+  });
+
+  it('fails a model that stops after one tool', async () => {
+    const m = model(tools(call('a', 'get_weather')), text('It is 17.3°C and rainy in Lisbon.'));
+    await expect(runAgentProbe(m.send)).rejects.toThrow(/agent probe failed: answered after calling only get_weather/);
+  });
+
+  it('fails a model that calls both tools but answers from imagination', async () => {
+    const m = model(tools(call('a', 'get_weather'), call('b', 'get_time')), text('It is sunny and about 22 degrees, mid-afternoon.'));
+    await expect(runAgentProbe(m.send)).rejects.toThrow(/agent probe failed: the answer ignores the tool results/);
+  });
+
+  it('fails a prose answer, a broken call and an endless tool loop', async () => {
+    await expect(runAgentProbe(model(text('Lisbon is sunny.')).send)).rejects.toThrow(/no valid tool call: answered without calling a tool/);
+    const broken = { id: 'x', type: 'function', function: { name: 'get_time', arguments: '{"town":"Lisbon"}' } };
+    await expect(runAgentProbe(model(tools(call('a', 'get_weather')), tools(broken)).send)).rejects.toThrow(/no valid tool call/);
+    const loop = model(tools(call('a', 'get_weather')), tools(call('b', 'get_weather')), tools(call('c', 'get_weather')));
+    await expect(runAgentProbe(loop.send)).rejects.toThrow(/kept calling tools after 3 requests/);
+  });
+
+  it('reads the results however the answer phrases them', () => {
+    expect(answerUsesProbeResults(GOOD)).toBe(true);
+    expect(answerUsesProbeResults('Em Lisboa estão 17,3 °C com chuva fraca e são 14h52.')).toBe(true);
+    expect(answerUsesProbeResults('17 degrees, light rain, 2:52 PM local time')).toBe(true);
+    expect(answerUsesProbeResults('About 18 degrees at 3 pm.')).toBe(false);
+    expect(answerUsesProbeResults('It is 17.3°C.')).toBe(false); // the time is missing
+  });
+
+  it('a model failure is never mistaken for a busy provider', () => {
+    expect(isBusyProbeError('agent probe failed: the answer ignores the tool results ("rate limit 429")')).toBe(false);
+  });
+});
+
 import { isBusyProbeError } from '../../services/curation.js';
 import { buildHealthBoard } from '../../routes/curation.js';
 

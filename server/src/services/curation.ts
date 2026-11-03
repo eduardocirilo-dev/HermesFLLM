@@ -262,11 +262,12 @@ export function selectCurationCandidates(limit = CURATION_MAX_PROBES, now = Date
 }
 
 // ── Agent probe ──────────────────────────────────────────────────────────────
-// "Reply with OK" proves a model answers, not that it can drive an agent. The curation probe
-// gives the model one tool and asks for it; the reply must carry a tool call the Agent Guard
-// accepts (declared name, JSON-object arguments matching the schema). A model that answers in
-// prose, invents a tool or emits broken arguments is recorded 'unavailable' and leaves routing
-// until a later probe passes. Hermes always sends tools, so this is the bar that matters.
+// "Reply with OK" proves a model answers, not that it can drive an agent, and one easy tool call
+// is passed by weak models too. The probe is a short agent task instead: two tools are needed to
+// answer, and the final answer must USE the tool results (values the model cannot guess). That is
+// where weak models break agent work: they call one tool and stop, or answer from imagination.
+// A model that fails is recorded 'unavailable' and is only tried after every passing model.
+// Up to 3 requests per probe (call, maybe a second call, answer).
 
 export const AGENT_PROBE_TOOL = {
   type: 'function',
@@ -282,29 +283,90 @@ export const AGENT_PROBE_TOOL = {
   },
 } as const;
 
+export const AGENT_PROBE_TIME_TOOL = {
+  type: 'function',
+  function: {
+    name: 'get_time',
+    description: 'Get the current local time in a city.',
+    parameters: {
+      type: 'object',
+      properties: { city: { type: 'string', description: 'City name' } },
+      required: ['city'],
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+const AGENT_PROBE_TOOLS = [AGENT_PROBE_TOOL, AGENT_PROBE_TIME_TOOL];
+
 const AGENT_PROBE_MESSAGES = [
-  { role: 'system', content: 'You are an agent. Use the provided tools to answer.' },
-  { role: 'user', content: 'What is the weather in Lisbon right now? Use the tool.' },
+  { role: 'system', content: 'You are an agent. Use the provided tools, then answer from their results.' },
+  { role: 'user', content: 'What are the weather and the local time in Lisbon right now? Use the tools, then answer in one sentence.' },
 ];
 
-/** Throws (→ 'unavailable') unless the reply carries one valid call to the probe tool. */
+// What the tools "return": values the model cannot guess, so the answer proves it read them.
+const AGENT_PROBE_RESULTS: Record<string, unknown> = {
+  get_weather: { city: 'Lisbon', temperature_c: 17.3, condition: 'light rain' },
+  get_time: { city: 'Lisbon', local_time: '14:52' },
+};
+const AGENT_PROBE_MAX_REQUESTS = 3;
+
+/** Throws (→ 'unavailable') unless the reply carries valid calls to the probe tools. */
 export function assertAgentProbeReply(reply: any): void {
   const calls = reply?.choices?.[0]?.message?.tool_calls;
   if (!Array.isArray(calls) || calls.length === 0) {
     const text = String(reply?.choices?.[0]?.message?.content ?? '').trim().slice(0, 80);
     throw new Error(`no valid tool call: answered without calling a tool${text ? ` ("${text}")` : ''}`);
   }
-  const reasons = agentGuardReasons(calls, [AGENT_PROBE_TOOL as any]);
+  const reasons = agentGuardReasons(calls, AGENT_PROBE_TOOLS as any);
   if (reasons.length > 0) throw new Error(`no valid tool call: ${reasons.slice(0, 2).join('; ')}`);
 }
 
+/** True when the answer carries both tool results (17.3 °C, 14:52), however it is phrased. */
+export function answerUsesProbeResults(text: string): boolean {
+  return /\b17(?:[.,]3)?\b/.test(text) && /\b(?:14|2)[:.h]52\b/i.test(text);
+}
+
+/**
+ * The probe task, with the transport injected: `send` posts the conversation so far and returns
+ * the reply. Throws a model failure ("no valid tool call" / "agent probe failed") or the
+ * transport's own error (a busy provider stays inconclusive).
+ */
+export async function runAgentProbe(send: (messages: any[]) => Promise<any>): Promise<void> {
+  const messages: any[] = [...AGENT_PROBE_MESSAGES];
+  const called = new Set<string>();
+  for (let step = 0; step < AGENT_PROBE_MAX_REQUESTS; step++) {
+    const reply = await send(messages);
+    const msg = reply?.choices?.[0]?.message ?? {};
+    const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+    if (calls.length === 0) {
+      if (called.size === 0) assertAgentProbeReply(reply); // throws: answered without a tool
+      const text = String(msg.content ?? '');
+      if (called.size < AGENT_PROBE_TOOLS.length) {
+        throw new Error(`agent probe failed: answered after calling only ${[...called].join(', ')} (needed get_weather and get_time)`);
+      }
+      if (!answerUsesProbeResults(text)) {
+        throw new Error(`agent probe failed: the answer ignores the tool results ("${text.trim().slice(0, 80)}")`);
+      }
+      return;
+    }
+    assertAgentProbeReply(reply);
+    messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: calls });
+    calls.forEach((c: any, i: number) => {
+      const name = c.function?.name as string;
+      called.add(name);
+      messages.push({ role: 'tool', tool_call_id: c.id ?? `call_${step}_${i}`, content: JSON.stringify(AGENT_PROBE_RESULTS[name]) });
+    });
+  }
+  throw new Error(`agent probe failed: kept calling tools after ${AGENT_PROBE_MAX_REQUESTS} requests without answering`);
+}
+
 async function agentProbeChat(candidate: ProbeCandidate): Promise<void> {
-  const reply = await probeRequest(candidate, AGENT_PROBE_MESSAGES, {
-    tools: [AGENT_PROBE_TOOL],
+  await runAgentProbe(messages => probeRequest(candidate, messages, {
+    tools: AGENT_PROBE_TOOLS,
     tool_choice: 'auto',
-    max_tokens: 256,
-  });
-  assertAgentProbeReply(reply);
+    max_tokens: 512,
+  }));
 }
 
 // A busy provider is not a broken model: a 429/5xx or "high demand" answer to a probe says
@@ -313,7 +375,7 @@ async function agentProbeChat(candidate: ProbeCandidate): Promise<void> {
 const BUSY_PROBE_ERROR = /\b(429|5\d\d)\b|high demand|busy|overloaded|temporarily unavailable|capacity|rate.?limit|try again later/i;
 
 export function isBusyProbeError(message: string | undefined): boolean {
-  return !!message && BUSY_PROBE_ERROR.test(message) && !/no valid tool call/i.test(message);
+  return !!message && BUSY_PROBE_ERROR.test(message) && !/no valid tool call|agent probe failed/i.test(message);
 }
 
 // ── Rounds ───────────────────────────────────────────────────────────────────
