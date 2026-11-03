@@ -15,7 +15,7 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
 | | FreeLLMAPI | HermesFLLM |
 |---|---|---|
 | **Broken tool calls** | Arguments that are not valid JSON are dropped silently when streaming and passed through otherwise; calls to undeclared tools go undetected | **Agent Guard** (on by default): an unnamed call, an undeclared tool, non-object/invalid JSON arguments or a schema violation fails the turn over to another model *before* anything reaches the agent, and penalises the model |
-| **Silent / stalled models** | The time-budget hedge skips the first attempt and stops once a keep-alive is sent | **Agent deadline**: any attempt (the first included) that sends no output within 30s is cancelled and the turn fails over invisibly; only that model is ruled out, not its whole provider |
+| **Silent / stalled models** | The time-budget hedge skips the first attempt and stops once a keep-alive is sent | **Agent deadline**: any attempt (the first included) that produces no token within 30s (text, reasoning or a tool-call fragment) is cancelled and the turn fails over invisibly; only that model is ruled out, not its whole provider. A model that has started writing, even a long tool call, is never cut by it |
 | **Slow models** | Ranked mostly on success; a 3-minute answer counts as a success | **Latency ceiling**: models averaging over 60s per successful answer go to the back of the chain, even mid-conversation (sticky) |
 | **Model selection** | Balanced default (reliability 50% / speed 25% / intelligence 25%) | Agent policy: reliability 55% / intelligence 30% / speed 15%, plus a 90% minimum success rate |
 | **Knowing which models work** | Proactive probe is off by default and observation-only (routing never reads it); probes ask "Reply with OK" | **Continuous agent-grade curation**: every 10 min, up to 4 probes that ask the model to make a real tool call, validated by the Agent Guard. A model that fails is excluded until it passes again (verdicts last 1h). Busy providers (429/5xx) count as inconclusive, not as broken |
@@ -67,7 +67,7 @@ fallback with a model the fallback provider actually has, so a HermesFLLM outage
 | Variable | Default | |
 |---|---|---|
 | `AGENT_GUARD` | on | `0` disables the Agent Guard |
-| `HERMESFLLM_ATTEMPT_DEADLINE_MS` | 30000 | silent-attempt deadline, `0` disables |
+| `HERMESFLLM_ATTEMPT_DEADLINE_MS` | 30000 | time to the first token (any kind) before an attempt fails over, `0` disables |
 | `HERMESFLLM_MAX_LATENCY_MS` | 60000 | latency ceiling |
 | `HERMESFLLM_CURATION_INTERVAL_MS` | 600000 | curation round interval |
 | `HERMESFLLM_CURATION_MAX_PROBES` | 4 | probes per round |

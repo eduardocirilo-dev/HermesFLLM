@@ -8,9 +8,12 @@ export function isHermesAutoModel(modelId: string | undefined | null): boolean {
   return !!modelId && modelId.trim().toLowerCase() === HERMES_AUTO_MODEL_ID.toLowerCase();
 }
 
-// Agent deadline: an attempt that has not committed any output within this many ms is cancelled
-// and the turn fails over to the next model, invisibly. Covers attempt 0 too, which the upstream
-// time-budget hedge deliberately exempts. 0 disables. Env HERMESFLLM_ATTEMPT_DEADLINE_MS.
+// Agent deadline: an attempt that has produced no token of any kind (text, reasoning or a tool-call
+// fragment) within this many ms is cancelled and the turn fails over to the next model, invisibly.
+// It is a time-to-first-token limit, not a time-to-commit one: tool calls are buffered until the
+// stream ends, so a commit-based limit would cut models that are steadily writing a long call.
+// Covers attempt 0 too, which the upstream time-budget hedge deliberately exempts. 0 disables.
+// Env HERMESFLLM_ATTEMPT_DEADLINE_MS.
 export const DEFAULT_ATTEMPT_DEADLINE_MS = 30_000;
 
 export function attemptDeadlineMs(env: Record<string, string | undefined> = process.env): number {
@@ -27,7 +30,7 @@ export function attemptDeadlineMs(env: Record<string, string | undefined> = proc
  */
 export function agentDeadlineError(displayName: string, ms: number): Error {
   return Object.assign(
-    new Error(`agent deadline: ${displayName} sent no output within ${(ms / 1000).toFixed(1)}s (timeout), failing over`),
+    new Error(`agent deadline: ${displayName} sent no token within ${(ms / 1000).toFixed(1)}s (timeout), failing over`),
     { agentDeadline: true, skipModelForRequest: true },
   );
 }
