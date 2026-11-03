@@ -169,3 +169,20 @@ describe('agent probe', () => {
     expect(row.last_error).toMatch(/no valid tool call/);
   });
 });
+
+import { isBusyProbeError } from '../../services/curation.js';
+
+describe('busy providers are inconclusive', () => {
+  it('recognises overload answers but not real tool failures', () => {
+    expect(isBusyProbeError('xKiro API error 503: The model is temporarily unavailable due to high demand')).toBe(true);
+    expect(isBusyProbeError('UnoRouter API error 503: All providers for model are busy right now')).toBe(true);
+    expect(isBusyProbeError('Groq API error 429: rate limit reached')).toBe(true);
+    expect(isBusyProbeError('NaraRouter API error 400: The model rejected this request')).toBe(false);
+    expect(isBusyProbeError('no valid tool call: answered without calling a tool')).toBe(false);
+  });
+
+  it('a busy probe does not exclude the model', async () => {
+    await runCurationRound({ chat: async c => { if (c.modelId === 'm1') throw new Error('API error 503: high demand'); } });
+    expect(isCuratedOut({ platform: 'p', model_id: 'm1', endpoint_scope: '' })).toBe(false);
+  });
+});

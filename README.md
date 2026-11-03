@@ -1,19 +1,42 @@
 # HermesFLLM
 
 **HermesFLLM** is a fork of [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) by Tashfeen
-Ahmed (MIT, see [`LICENSE`](LICENSE)), tuned to serve as the model router for
-[Hermes Agent](https://github.com/NousResearch). It is not affiliated with FreeLLMAPI or Nous Research.
+Ahmed (MIT, see [`LICENSE`](LICENSE)), rebuilt around one goal: **AI agent sessions with as close
+to zero errors as free models allow.** It is tuned for [Hermes Agent](https://github.com/NousResearch)
+but works with any OpenAI-compatible agent that sends `tools`. It is not affiliated with FreeLLMAPI
+or Nous Research.
 
-It is the same router (one OpenAI-compatible `/v1` endpoint over the free tiers of many
-providers), with:
+FreeLLMAPI is a great general-purpose router over free LLM tiers. Agents stress it differently from
+chat: every turn carries tools, streams, can run for minutes, and one broken turn derails the whole
+session. HermesFLLM keeps the router and changes how it decides, verifies and recovers.
 
-- **HermesFLLM branding** in the dashboard and API (`owned_by: hermesfllm`), so it can run next to
-  an unmodified FreeLLMAPI install without confusion.
-- **launchd service for macOS** (`scripts/launchd/install.sh`): starts at login and restarts if it
-  dies, so the router is already up when Hermes probes `/v1/models`.
-- **Hermes plugin** (`hermes-plugin/hermesfllm/`): `hermesfllm_status` and `hermesfllm_stop` tools.
-- **`scripts/hermes-setup.sh`**: prints, without writing anything, the `~/.hermes/config.yaml`
-  changes that make HermesFLLM the primary provider.
+## What HermesFLLM adds
+
+| | FreeLLMAPI | HermesFLLM |
+|---|---|---|
+| **Broken tool calls** | Arguments that are not valid JSON are dropped silently when streaming and passed through otherwise; calls to undeclared tools go undetected | **Agent Guard** (on by default): an unnamed call, an undeclared tool, non-object/invalid JSON arguments or a schema violation fails the turn over to another model *before* anything reaches the agent, and penalises the model |
+| **Silent / stalled models** | The time-budget hedge skips the first attempt and stops once a keep-alive is sent | **Agent deadline**: any attempt (the first included) that sends no output within 30s is cancelled and the turn fails over invisibly; only that model is ruled out, not its whole provider |
+| **Slow models** | Ranked mostly on success; a 3-minute answer counts as a success | **Latency ceiling**: models averaging over 60s per successful answer go to the back of the chain, even mid-conversation (sticky) |
+| **Model selection** | Balanced default (reliability 50% / speed 25% / intelligence 25%) | Agent policy: reliability 55% / intelligence 30% / speed 15%, plus a 90% minimum success rate |
+| **Knowing which models work** | Proactive probe is off by default and observation-only (routing never reads it); probes ask "Reply with OK" | **Continuous agent-grade curation**: every 10 min, up to 4 probes that ask the model to make a real tool call, validated by the Agent Guard. A model that fails is excluded until it passes again (verdicts last 1h). Busy providers (429/5xx) count as inconclusive, not as broken |
+| **Reacting to failures** | Penalties and cooldowns after real failures | Same, plus a real-traffic failure triggers a probe of that model within ~30s |
+| **Failover target** | Next model in the chain | A **warm reserve**: the most reliable recent models are probed most often, so failover lands on a model already proven to answer |
+| **Visibility** | Analytics and logs | **Model health board** (top bar): live 24h success gauge, Agent Guard saves, live curation, warm reserve, routing policy, excluded models with the reason |
+| **Model id** | `auto` | `autoTOP-hermes` (routes like `auto` under the agent policy; `auto` still works) |
+| **Running beside the agent** | Docker / desktop app | macOS **launchd** service (`scripts/launchd/install.sh`), build stamp (version, commit, build time) on every page and at `GET /api/hermesfllm/version` |
+
+## Honest limits
+
+- **Not proven yet with numbers.** The mechanisms above target the failures we observed with Hermes,
+  but a side-by-side measurement against FreeLLMAPI has not been published.
+- **The model catalog still comes from FreeLLMAPI.** Without a FreeLLMAPI Premium key, an install
+  gets the monthly catalog snapshot. An open HermesFLLM catalog is planned.
+- **Probes spend free quota.** Up to 4 probes every 10 minutes, capped at 60 per provider per day
+  (`HERMESFLLM_CURATION_*`).
+- **A model that starts answering and then stalls** cannot be switched invisibly once output has
+  reached the agent; the latency ceiling demotes such models after a few slow answers.
+- The Agent Guard and the agent deadline cover the OpenAI `chat/completions` surface, which Hermes
+  uses; the Anthropic and Responses surfaces keep upstream behaviour.
 
 ## Quick start (macOS, Node)
 
@@ -22,22 +45,35 @@ git clone https://github.com/eduardocirilo-dev/HermesFLLM.git
 cd HermesFLLM
 npm install && npm run build
 ENCRYPTION_KEY="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
-printf "ENCRYPTION_KEY=%s\nPORT=3002\nHOST=127.0.0.1\nNODE_ENV=production\n" "$ENCRYPTION_KEY" > .env
+printf "ENCRYPTION_KEY=%s\nPORT=3002\nHOST=127.0.0.1\nNODE_ENV=production\nFREEAPI_DB_PATH=%s\n" \
+  "$ENCRYPTION_KEY" "$HOME/Library/Application Support/HermesFLLM/freeapi.db" > .env
 scripts/launchd/install.sh
 ```
 
-Open the dashboard at http://127.0.0.1:3002, add your provider keys and copy your unified API key.
-Port 3002 lets it run beside an existing FreeLLMAPI on 3001; use any free port.
-
-**Keep `HOST=127.0.0.1`.** The router stores your provider keys; without it the server listens on
-all interfaces.
+Open http://127.0.0.1:3002, add your provider keys and copy your unified API key. Port 3002 lets it
+run beside an existing FreeLLMAPI on 3001. Keep the database outside iCloud/Dropbox-synced folders
+(as above): syncing a live SQLite database can corrupt it. **Keep `HOST=127.0.0.1`**: the router
+stores your provider keys.
 
 ### Use it from Hermes
 
-Point a Hermes provider at `http://127.0.0.1:3002/v1` with your unified key and model `auto`, or run
-`scripts/hermes-setup.sh` to see the suggested
-changes. To install the plugin, link `hermes-plugin/hermesfllm` into `~/.hermes/plugins/` and run
-`hermes plugins enable hermesfllm`.
+Point a Hermes provider at `http://127.0.0.1:3002/v1` with your unified key and model
+`autoTOP-hermes`, or run `scripts/hermes-setup.sh` to see the suggested changes. Give Hermes a
+fallback with a model the fallback provider actually has, so a HermesFLLM outage never sends
+`autoTOP-hermes` to a provider that does not know it.
+
+### Tuning
+
+| Variable | Default | |
+|---|---|---|
+| `AGENT_GUARD` | on | `0` disables the Agent Guard |
+| `HERMESFLLM_ATTEMPT_DEADLINE_MS` | 30000 | silent-attempt deadline, `0` disables |
+| `HERMESFLLM_MAX_LATENCY_MS` | 60000 | latency ceiling |
+| `HERMESFLLM_CURATION_INTERVAL_MS` | 600000 | curation round interval |
+| `HERMESFLLM_CURATION_MAX_PROBES` | 4 | probes per round |
+| `HERMESFLLM_CURATION_DAILY_CAP` | 60 | probes per provider per day |
+| `HERMESFLLM_CURATION_VERDICT_TTL_MS` | 3600000 | how long an exclusion lasts |
+| `HERMESFLLM_CURATION_ENABLED` | on | `0` disables curation |
 
 ### Manage the service
 
@@ -46,7 +82,8 @@ launchctl kickstart -k gui/$(id -u)/io.github.hermesfllm   # restart (e.g. after
 scripts/launchd/install.sh uninstall                       # remove
 ```
 
-Logs: `~/Library/Logs/HermesFLLM/hermesfllm.log`.
+Logs: `~/Library/Logs/HermesFLLM/hermesfllm.log`. Also included: a Hermes plugin with status/stop
+tools (`hermes-plugin/hermesfllm/`).
 
 ## Differences from upstream, for maintainers
 
@@ -54,6 +91,9 @@ Logs: `~/Library/Logs/HermesFLLM/hermesfllm.log`.
   (`FREELLMAPI_*`), storage keys and the catalog feed are unchanged so upstream changes merge cleanly.
 - Outbound `User-Agent` / `X-Title` headers to providers still say FreeLLMAPI on purpose: some free
   tiers may recognise the router by them.
+- HermesFLLM code lives mostly in `server/src/services/curation.ts`, `server/src/lib/hermes-auto.ts`,
+  `server/src/lib/tool-validate.ts` (Agent Guard), `server/src/routes/curation.ts` and
+  `client/src/pages/HealthBoardPage.tsx`.
 
 Everything below is the original FreeLLMAPI README.
 

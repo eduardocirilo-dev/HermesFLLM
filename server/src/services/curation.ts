@@ -265,6 +265,15 @@ async function agentProbeChat(candidate: ProbeCandidate): Promise<void> {
   assertAgentProbeReply(reply);
 }
 
+// A busy provider is not a broken model: a 429/5xx or "high demand" answer to a probe says
+// nothing about whether the model can drive an agent. Treat it as inconclusive (keep the last
+// verdict) instead of excluding the model for an hour and shrinking the pool Hermes routes over.
+const BUSY_PROBE_ERROR = /\b(429|5\d\d)\b|high demand|busy|overloaded|temporarily unavailable|capacity|rate.?limit|try again later/i;
+
+export function isBusyProbeError(message: string | undefined): boolean {
+  return !!message && BUSY_PROBE_ERROR.test(message) && !/no valid tool call/i.test(message);
+}
+
 // ── Rounds ───────────────────────────────────────────────────────────────────
 
 export interface CurationRound {
@@ -284,7 +293,10 @@ export async function runCurationRound(deps: ModelProbeRequestDeps = {}, now = D
     const results: CurationRound['results'] = [];
     for (const c of candidates) {
       countProbe(c.platform, now);
-      const outcome = await probeModel(c, { chat: deps.chat ?? agentProbeChat });
+      let outcome = await probeModel(c, { chat: deps.chat ?? agentProbeChat });
+      if (outcome.status === 'unavailable' && isBusyProbeError(outcome.error)) {
+        outcome = { status: 'error', error: `inconclusive (provider busy): ${outcome.error}` };
+      }
       recordProbeResult(getDb(), c, outcome);
       // Answered or truly down: either way the urgent question is settled.
       if (outcome.status !== 'error') urgentQueue.delete(c.modelDbId);
