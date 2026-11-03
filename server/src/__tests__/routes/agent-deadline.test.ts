@@ -18,6 +18,7 @@ const { createApp } = await import('../../app.js');
 const { initDb, getDb, getUnifiedApiKey } = await import('../../db/index.js');
 const { encrypt } = await import('../../lib/crypto.js');
 const { setRoutingStrategy } = await import('../../services/router.js');
+const { resetModelFailureWindows } = await import('../../lib/fallback-loop.js');
 
 async function post(app: Express, body: any, key: string) {
   const server = app.listen(0, '127.0.0.1');
@@ -54,6 +55,67 @@ function silentUntilAborted() {
   };
 }
 
+/** Resolves after `ms`, or rejects when the request is cancelled (like a real fetch body read). */
+function tick(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason); }, { once: true });
+  });
+}
+
+/** A model that writes one tool call steadily, a fragment every 60ms, for ~480ms in total. */
+function steadyToolCall() {
+  return async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
+    yield { choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write_file', arguments: '' } }] } }] };
+    for (const part of ['{"path":"a.txt",', '"content":"', 'x'.repeat(20), 'y'.repeat(20), 'z'.repeat(20), 'w'.repeat(20), '"}']) {
+      await tick(60, opts.signal);
+      yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: part } }] } }] };
+    }
+    yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+  };
+}
+
+/** A reasoning model: thinks for ~400ms in small steps, then answers. */
+function longThinker(answer: string) {
+  return async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
+    for (let i = 0; i < 8; i++) {
+      await tick(50, opts.signal);
+      yield { choices: [{ delta: { reasoning_content: `step ${i}. ` } }] };
+    }
+    yield { choices: [{ delta: { content: answer } }] };
+    yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+  };
+}
+
+/** Sends only the role preamble, then nothing until cancelled. */
+function roleThenSilence() {
+  return async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
+    yield { choices: [{ delta: { role: 'assistant' } }] };
+    await tick(60_000, opts.signal);
+    yield { choices: [{ delta: { content: 'never' } }] };
+  };
+}
+
+const WRITE_FILE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'write_file',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+  },
+};
+
+function toolCallNames(raw: string): string[] {
+  const names: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+    try {
+      for (const tc of JSON.parse(line.slice(6)).choices?.[0]?.delta?.tool_calls ?? []) if (tc.function?.name) names.push(tc.function.name);
+    } catch { /* comment or error frame */ }
+  }
+  return names;
+}
+
 function answers(text: string) {
   return async function* () {
     yield { choices: [{ delta: { content: text } }] };
@@ -78,7 +140,11 @@ describe('agent deadline', () => {
 
   beforeEach(() => {
     streamChatCompletion.mockReset();
+    // Cancelled attempts penalise their model; start every case from a clean pool.
     getDb().prepare('DELETE FROM rate_limit_cooldowns').run();
+    getDb().prepare('DELETE FROM rate_limit_usage').run();
+    getDb().prepare('DELETE FROM requests').run();
+    resetModelFailureWindows();
     process.env.HERMESFLLM_ATTEMPT_DEADLINE_MS = '150';
   });
 
@@ -107,6 +173,16 @@ describe('agent deadline', () => {
     expect(streamChatCompletion).toHaveBeenCalledTimes(1);
   });
 
+  it('still fails over a model that sends only the role preamble and then goes silent', async () => {
+    streamChatCompletion
+      .mockImplementationOnce(roleThenSilence())
+      .mockImplementation(answers('ok from the second model'));
+    const { status, raw } = await post(app, { model: 'auto', stream: true, messages: [{ role: 'user', content: 'hi' }] }, key);
+    expect(status).toBe(200);
+    expect(content(raw)).toBe('ok from the second model');
+    expect(streamChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
   it('can be disabled', async () => {
     process.env.HERMESFLLM_ATTEMPT_DEADLINE_MS = '0';
     let release: () => void = () => {};
@@ -118,6 +194,28 @@ describe('agent deadline', () => {
     const { raw } = await post(app, { model: 'auto', stream: true, messages: [{ role: 'user', content: 'hi' }] }, key);
     void release;
     expect(content(raw)).toBe('slow but kept');
+    expect(streamChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: tool calls are buffered to the end of the stream, so a deadline that waited for
+  // the commit cancelled a model steadily writing a long tool call, and every fallback after it.
+  it('does not cancel a model that is still writing a tool call past the deadline', async () => {
+    streamChatCompletion.mockImplementation(steadyToolCall());
+    const { status, raw } = await post(app, {
+      model: 'autoTOP-hermes', stream: true, tools: [WRITE_FILE_TOOL],
+      messages: [{ role: 'user', content: 'write the file' }],
+    }, key);
+    expect(status).toBe(200);
+    expect(toolCallNames(raw)).toEqual(['write_file']);
+    expect(raw).not.toContain('agent deadline');
+    expect(streamChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cancel a model that is still reasoning past the deadline', async () => {
+    streamChatCompletion.mockImplementation(longThinker('thought it through'));
+    const { status, raw } = await post(app, { model: 'auto', stream: true, messages: [{ role: 'user', content: 'hi' }] }, key);
+    expect(status).toBe(200);
+    expect(content(raw)).toBe('thought it through');
     expect(streamChatCompletion).toHaveBeenCalledTimes(1);
   });
 });

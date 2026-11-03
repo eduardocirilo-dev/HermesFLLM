@@ -2800,6 +2800,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             sanitizeResponse(anyChunk);
             const text = typeof choice.delta?.content === 'string' ? choice.delta.content : '';
 
+            // HermesFLLM agent deadline: the model has started producing (text, reasoning or a
+            // tool-call fragment), so it is not silent. Tool calls are buffered to the end of the
+            // stream and never commit early, so waiting for the commit would cancel a model that is
+            // steadily writing a long tool call. A role-only preamble does not count. Mid-stream
+            // stalls stay with the upstream stall watchdog (PROVIDER_STREAM_STALL_TIMEOUT_MS).
+            if (deadlineTimer && (text.length > 0 || reasoning.length > 0 || (choice.delta?.tool_calls?.length ?? 0) > 0)) {
+              clearTimeout(deadlineTimer);
+              deadlineTimer = undefined;
+            }
+
             // #764: ttfb = first token of ANY kind, not just visible content —
             // reasoning models stream thinking long before the first answer
             // token, and the old code deferred ttfb until header flush (or left
