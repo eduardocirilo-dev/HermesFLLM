@@ -20,6 +20,7 @@
 // - A winner that fails after claiming (e.g. Agent Guard rejects its tool call) fails over through
 //   the loop as usual.
 // - Client aborts, time-budget aborts and non-retryable errors end the race immediately.
+import { markTurnRaced } from './hermes-shadow.js';
 import type { RouteResult } from '../services/router.js';
 import { getDb } from '../db/index.js';
 import { withKeyProxy } from './proxy.js';
@@ -209,6 +210,7 @@ export async function raceDispatch(a: RaceArgs): Promise<RaceOutcome> {
     if (backup) {
       stats.races++;
       console.log(`[Race] ${a.primary.platform}/${a.primary.modelId} silent for ${a.delayMs}ms, racing ${backup.platform}/${backup.modelId}`);
+      markTurnRaced();
       start(backup, true);
     }
     wake();

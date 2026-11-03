@@ -10,6 +10,7 @@ import { conversationsRouter } from './routes/conversations.js';
 import { logsRouter } from './routes/logs.js';
 import { modelsRouter } from './routes/models.js';
 import { proxyRouter } from './routes/proxy.js';
+import { shadowMiddleware } from './lib/hermes-shadow.js';
 import { responsesRouter } from './routes/responses.js';
 import { anthropicRouter } from './routes/anthropic.js';
 import { fallbackRouter } from './routes/fallback.js';
@@ -320,6 +321,8 @@ export function createApp(config?: Config) {
   // OpenAI router so it can content-negotiate `GET /v1/models` (Anthropic shape
   // when the caller sends `anthropic-version`, else it falls through). All other
   // paths it doesn't own fall through to the OpenAI router untouched.
+  // HermesFLLM: invisible side-by-side copy of sampled agent turns to FreeLLMAPI (off by default).
+  app.use('/v1/chat/completions', shadowMiddleware);
   app.use('/v1', anthropicRouter);
   app.use('/v1', proxyRouter);
   // OpenAI Moderation API shim (POST /v1/moderations)

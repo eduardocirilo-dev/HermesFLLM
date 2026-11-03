@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatAgo, formatCountdown, healthTone, raceShares } from './HealthBoardPage'
+import { formatAgo, formatCountdown, healthTone, raceShares, formatTtfb } from './HealthBoardPage'
 
 describe('healthTone', () => {
   it('uses the 95% / 80% thresholds', () => {
@@ -64,5 +64,12 @@ describe('rescued turns card', () => {
       expect(dict.healthBoard.rescuesTitle).toBeTruthy()
       expect(dict.healthBoard.rescuesSubtitle).toContain('{week}')
     }
+  })
+})
+
+describe('formatTtfb', () => {
+  it('shows p50 / p90 in seconds, or a dash for an empty slice', () => {
+    expect(formatTtfb({ p50: 1200, p90: 3400, n: 12 })).toBe('1.2s / 3.4s')
+    expect(formatTtfb({ p50: null, p90: null, n: 0 })).toBe('—')
   })
 })

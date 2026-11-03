@@ -6,6 +6,7 @@ import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PRO
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
 import { governorConfig } from '../lib/hermes-governor.js';
+import { shadowStats } from '../lib/hermes-shadow.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
 // excluded and why, and how many broken agent turns the Agent Guard caught.
@@ -144,6 +145,7 @@ export function buildHealthBoard(now = Date.now()) {
       const { min, max } = raceDelayBounds();
       return { enabled: isRaceEnabled(), ...raceStats(), minDelayMs: min, maxDelayMs: max };
     })(),
+    shadow: shadowStats(),
     traffic: {
       requests24h: traffic.total,
       successRate24h: traffic.total > 0 ? (traffic.ok ?? 0) / traffic.total : null,

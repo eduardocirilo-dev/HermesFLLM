@@ -1367,7 +1367,20 @@
     "rescue_deadline": "Modelos calados (30 s)",
     "rescue_stall": "Paradas no meio do turno",
     "rescue_runaway": "Loops de repetição",
-    "rescue_ceiling": "Turnos sem fim (5 min)"
+    "rescue_ceiling": "Turnos sem fim (5 min)",
+    "shadowTitle": "HermesFLLM vs FreeLLMAPI",
+    "shadowSampling": "amostra {rate}",
+    "shadowTtfb": "Primeiro token p50 / p90",
+    "shadowWaiting": "Comparação ligada: aguardando os primeiros turnos do agente na amostra.",
+    "shadowOffHint": "Desligada. Defina HERMESFLLM_SHADOW=1 para enviar uma cópia invisível de 1 a cada 10 turnos do agente ao FreeLLMAPI e comparar: tool calls válidas, primeiro token p50/p90, turnos sem resposta.",
+    "shadowExcluded": "Fora da conta: {pending} ainda em execução, {unreachable} com o FreeLLMAPI desligado.",
+    "shadowValidCall": "Turnos que terminam com uma tool call válida",
+    "shadowNoAnswer": "Turnos sem resposta",
+    "shadowHigherBetter": "maior é melhor",
+    "shadowLowerBetter": "menor é melhor",
+    "shadowRaceSplit": "Primeiro token do HermesFLLM com a corrida: {raced} ({racedN} turnos), sem ela: {notRaced} ({notRacedN} turnos). O FreeLLMAPI não tem corrida.",
+    "shadowTooFew": "Ainda sem dados para decidir: {pairs} de {min} turnos iguais.",
+    "shadowVerdict": "O HermesFLLM é melhor em {wins} de {total} métricas, em {pairs} turnos iguais nos últimos {days} dias (primeiro token comparado no p90)."
   },
   "build": {
     "updated": "atualizado"

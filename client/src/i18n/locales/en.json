@@ -1367,7 +1367,20 @@
     "rescue_deadline": "Silent models (30s)",
     "rescue_stall": "Stalled mid-turn",
     "rescue_runaway": "Repetition loops",
-    "rescue_ceiling": "Endless turns (5 min)"
+    "rescue_ceiling": "Endless turns (5 min)",
+    "shadowTitle": "HermesFLLM vs FreeLLMAPI",
+    "shadowSampling": "sampling {rate}",
+    "shadowTtfb": "First token p50 / p90",
+    "shadowWaiting": "Comparison on: waiting for the first sampled agent turns.",
+    "shadowOffHint": "Off. Set HERMESFLLM_SHADOW=1 to send an invisible copy of 1 in 10 agent turns to FreeLLMAPI and compare: valid tool calls, first token p50/p90, turns with no answer.",
+    "shadowExcluded": "Left out: {pending} still running, {unreachable} with FreeLLMAPI not running.",
+    "shadowValidCall": "Turns ending with a valid tool call",
+    "shadowNoAnswer": "Turns with no answer",
+    "shadowHigherBetter": "higher is better",
+    "shadowLowerBetter": "lower is better",
+    "shadowRaceSplit": "HermesFLLM first token with the race: {raced} ({racedN} turns), without it: {notRaced} ({notRacedN} turns). FreeLLMAPI has no race.",
+    "shadowTooFew": "Not enough data to decide: {pairs} of {min} identical turns.",
+    "shadowVerdict": "HermesFLLM is better on {wins} of {total} metrics, over {pairs} identical turns in {days} days (first token compared at p90)."
   },
   "build": {
     "updated": "updated"
