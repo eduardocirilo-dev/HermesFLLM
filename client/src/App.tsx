@@ -75,6 +75,7 @@ const navItems = [
   { to: '/playground', labelKey: 'nav.playground' },
   { to: '/keys', labelKey: 'nav.keys' },
   { to: '/agents', labelKey: 'nav.agents' },
+  { to: '/health', labelKey: 'nav.health' },
   { to: '/analytics', labelKey: 'nav.analytics' },
   { to: '/premium', labelKey: 'nav.premium' },
 ]
@@ -97,7 +98,6 @@ const modelItems = [
 // deliberately kept out of navItems so the top bar does not grow a seventh entry.
 const analyticsItems = [
   { to: '/analytics', labelKey: 'nav.analytics' },
-  { to: '/health', labelKey: 'nav.health' },
   { to: '/logs', labelKey: 'nav.logs' },
 ]
 
@@ -117,7 +117,7 @@ const navMenus: Record<
   '/analytics': {
     ariaKey: 'nav.analyticsMenu',
     items: analyticsItems,
-    isActive: (pathname) => pathname.startsWith('/analytics') || pathname.startsWith('/logs') || pathname.startsWith('/health'),
+    isActive: (pathname) => pathname.startsWith('/analytics') || pathname.startsWith('/logs'),
   },
 }
 
