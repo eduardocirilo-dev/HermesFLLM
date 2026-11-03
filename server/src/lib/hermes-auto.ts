@@ -11,7 +11,7 @@ export function isHermesAutoModel(modelId: string | undefined | null): boolean {
 // Agent deadline: an attempt that has not committed any output within this many ms is cancelled
 // and the turn fails over to the next model, invisibly. Covers attempt 0 too, which the upstream
 // time-budget hedge deliberately exempts. 0 disables. Env HERMESFLLM_ATTEMPT_DEADLINE_MS.
-export const DEFAULT_ATTEMPT_DEADLINE_MS = 60_000;
+export const DEFAULT_ATTEMPT_DEADLINE_MS = 30_000;
 
 export function attemptDeadlineMs(env: Record<string, string | undefined> = process.env): number {
   const raw = env.HERMESFLLM_ATTEMPT_DEADLINE_MS;
