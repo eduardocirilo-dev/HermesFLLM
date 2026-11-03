@@ -1688,9 +1688,9 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
         // about whether candidate four is up. Once the empty-completion streak
         // lifts the exemption (#751), the failure counts everywhere.
         if (!exempt && stopIfBreakerTripped()) return;
-        // HermesFLLM rescue (Turn Governor / agent deadline): the agent is still waiting and the
-        // time went to a model that failed it, so the next hops get a fresh budget.
-        if (err?.governor === true || err?.agentDeadline === true) budgetStartedAt = Date.now();
+        // HermesFLLM rescue (Turn Governor / agent deadline / Agent Guard): the agent is still
+        // waiting and the time went to a model that failed it, so the next hops get a fresh budget.
+        if (err?.governor === true || err?.agentDeadline === true || err?.agentGuard === true) budgetStartedAt = Date.now();
         continue;
       }
       traceAttempt(classifyAttemptError(err), err);

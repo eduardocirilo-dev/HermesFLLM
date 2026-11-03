@@ -17,8 +17,10 @@ vi.mock('../../providers/index.js', async (importOriginal) => {
 const { createApp } = await import('../../app.js');
 const { initDb, getDb, getUnifiedApiKey } = await import('../../db/index.js');
 const { encrypt } = await import('../../lib/crypto.js');
-const { setRoutingStrategy } = await import('../../services/router.js');
+const { setRoutingStrategy, clearAllPenalties } = await import('../../services/router.js');
 const { resetModelFailureWindows } = await import('../../lib/fallback-loop.js');
+const { resetRaceState } = await import('../../lib/hermes-race.js');
+const { clearAllCooldowns } = await import('../../services/ratelimit.js');
 
 const BASH_TOOL = {
   type: 'function',
@@ -101,6 +103,13 @@ function slowSteadyToolCall(ms: number) {
   };
 }
 
+/** Sends nothing until cancelled. */
+function silent() {
+  return async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
+    await waitAbort(opts.signal);
+  };
+}
+
 /** Sends prose (the agent starts receiving it), then freezes until cancelled. */
 function proseThenFreeze() {
   return async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
@@ -137,6 +146,9 @@ describe('Turn Governor', () => {
     getDb().prepare('DELETE FROM rate_limit_usage').run();
     getDb().prepare('DELETE FROM requests').run();
     resetModelFailureWindows();
+    clearAllPenalties(); // failed attempts penalise and cool models down; each test starts with the full ladder
+    clearAllCooldowns();
+    resetRaceState();
     process.env.HERMESFLLM_RACE = '0'; // isolate from the first-token race
     process.env.HERMESFLLM_STALL_MS = '150';
     process.env.HERMESFLLM_COMMITTED_STALL_MS = '150';
@@ -221,6 +233,38 @@ describe('Turn Governor', () => {
     expect(status).toBe(200);
     expect(read(raw).content).toBe('third model answered');
     expect(streamChatCompletion).toHaveBeenCalledTimes(3);
+  });
+
+  it('an Agent Guard rejection renews the budget, so a silent third attempt is cut by its deadline, not by the budget', async () => {
+    // Turn bbeaae: two guard rejections spent the budget, the third attempt (and its race backup)
+    // sat silent and the budget expired mid-attempt with models still to try. Budget 300ms, agent deadline 150ms.
+    process.env.FALLBACK_TIME_BUDGET_MS = '300';
+    process.env.HERMESFLLM_ATTEMPT_DEADLINE_MS = '150';
+    delete process.env.HERMESFLLM_RACE; // as in bbeaae, a race backup is the one left running
+    process.env.HERMESFLLM_RACE_MIN_DELAY_MS = '0';
+    process.env.HERMESFLLM_RACE_DELAY_MS = '50';
+    streamChatCompletion
+      .mockImplementationOnce(async function* () {
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'x', type: 'function', function: { name: 'Bash', arguments: '{"no' } }] } }] };
+        await new Promise(r => setTimeout(r, 200));
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'pe": 1}' } }] } }] };
+        yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+      })
+      .mockImplementationOnce(async function* () { // a second, quick rejection (an undeclared tool)
+        yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'y', type: 'function', function: { name: 'read_terminal', arguments: '{}' } }] } }] };
+        yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+      })
+      .mockImplementationOnce(silent()) // the third model…
+      .mockImplementationOnce(silent()) // …and the backup the race starts against it
+      .mockImplementation(answers('fourth model answered'));
+    try {
+      const { status, raw } = await post(app, turn(), key);
+      expect(status).toBe(200);
+      expect(read(raw).content).toBe('fourth model answered');
+      expect(streamChatCompletion).toHaveBeenCalledTimes(5);
+    } finally {
+      for (const k of ['HERMESFLLM_ATTEMPT_DEADLINE_MS', 'HERMESFLLM_RACE_MIN_DELAY_MS', 'HERMESFLLM_RACE_DELAY_MS']) delete process.env[k];
+    }
   });
 
   it('can be switched off', async () => {
