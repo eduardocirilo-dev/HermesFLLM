@@ -16,7 +16,8 @@
     "switchToEnglish": "Switch to English",
     "modelsMenu": "Browse model types",
     "logs": "Logs",
-    "analyticsMenu": "Analytics pages"
+    "analyticsMenu": "Analytics pages",
+    "health": "Model health"
   },
   "auth": {
     "createYourAccount": "Create your account",
@@ -1324,5 +1325,28 @@
     "tryConfidence": "{value}% confident",
     "tryServedBy": "{model} · {latency} ms",
     "exampleTitle": "Example request"
+  },
+  "healthBoard": {
+    "title": "Model health",
+    "description": "What the router prefers right now, what curation excluded, and the agent turns the Agent Guard saved.",
+    "loadError": "Could not load the health board.",
+    "success24h": "success 24h",
+    "requests24h": "requests in the last 24h",
+    "guardTitle": "Agent Guard",
+    "on": "On",
+    "off": "Off",
+    "guardSaved": "broken tool calls caught in 24h ({week} in 7 days), each retried on another model",
+    "curationTitle": "Next curation",
+    "nextPass": "every {hours}h, up to {max} live probes per pass",
+    "probed": "{working} of {total} probed models answering",
+    "topTitle": "Most reliable models (24h)",
+    "noTraffic": "Not enough traffic yet. Models need 5 requests to be ranked.",
+    "policyTitle": "Routing policy",
+    "reliability": "Reliability",
+    "intelligence": "Intelligence",
+    "speed": "Speed",
+    "policyFoot": "Strategy {strategy} · models below {floor} success are skipped",
+    "excludedTitle": "Excluded by curation",
+    "noneExcluded": "No model is excluded right now."
   }
 }

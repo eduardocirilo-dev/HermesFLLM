@@ -16,7 +16,8 @@
     "modelsMenu": "Explorar tipos de modelo",
     "agents": "Agentes",
     "logs": "Logs",
-    "analyticsMenu": "Páginas de análises"
+    "analyticsMenu": "Páginas de análises",
+    "health": "Saúde dos modelos"
   },
   "auth": {
     "createYourAccount": "Crie sua conta",
@@ -1324,5 +1325,28 @@
     "tryConfidence": "{value}% de confiança",
     "tryServedBy": "{model} · {latency} ms",
     "exampleTitle": "Exemplo de requisição"
+  },
+  "healthBoard": {
+    "title": "Saúde dos modelos",
+    "description": "Os modelos que o router prefere agora, os que a curadoria excluiu e os turnos de agente que o Agent Guard salvou.",
+    "loadError": "Não foi possível carregar o painel.",
+    "success24h": "sucesso 24h",
+    "requests24h": "pedidos nas últimas 24h",
+    "guardTitle": "Agent Guard",
+    "on": "Ligado",
+    "off": "Desligado",
+    "guardSaved": "tool calls estragadas apanhadas em 24h ({week} em 7 dias), cada uma repetida noutro modelo",
+    "curationTitle": "Próxima curadoria",
+    "nextPass": "a cada {hours}h, até {max} testes reais por passagem",
+    "probed": "{working} de {total} modelos testados a responder",
+    "topTitle": "Modelos mais fiáveis (24h)",
+    "noTraffic": "Ainda não há tráfego suficiente. Um modelo precisa de 5 pedidos para entrar no ranking.",
+    "policyTitle": "Política de escolha",
+    "reliability": "Fiabilidade",
+    "intelligence": "Inteligência",
+    "speed": "Velocidade",
+    "policyFoot": "Estratégia {strategy} · modelos abaixo de {floor} de sucesso são ignorados",
+    "excludedTitle": "Excluídos pela curadoria",
+    "noneExcluded": "Nenhum modelo está excluído agora."
   }
 }

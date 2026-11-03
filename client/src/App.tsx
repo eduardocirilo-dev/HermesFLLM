@@ -44,6 +44,7 @@ import MediaDetailPage from '@/pages/MediaDetailPage'
 import EmbeddingDetailPage from '@/pages/EmbeddingDetailPage'
 import AnalyticsPage from '@/pages/AnalyticsPage'
 import LogsPage from '@/pages/LogsPage'
+import HealthBoardPage from '@/pages/HealthBoardPage'
 import PremiumPage from '@/pages/PremiumPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import AgentsPage from '@/pages/AgentsPage'
@@ -96,6 +97,7 @@ const modelItems = [
 // deliberately kept out of navItems so the top bar does not grow a seventh entry.
 const analyticsItems = [
   { to: '/analytics', labelKey: 'nav.analytics' },
+  { to: '/health', labelKey: 'nav.health' },
   { to: '/logs', labelKey: 'nav.logs' },
 ]
 
@@ -115,7 +117,7 @@ const navMenus: Record<
   '/analytics': {
     ariaKey: 'nav.analyticsMenu',
     items: analyticsItems,
-    isActive: (pathname) => pathname.startsWith('/analytics') || pathname.startsWith('/logs'),
+    isActive: (pathname) => pathname.startsWith('/analytics') || pathname.startsWith('/logs') || pathname.startsWith('/health'),
   },
 }
 
@@ -499,6 +501,7 @@ function App() {
                       <Route path="/fallback" element={<Navigate to="/models/chat" replace />} />
                       <Route path="/analytics" element={<AnalyticsPage />} />
                       <Route path="/logs" element={<LogsPage />} />
+                      <Route path="/health" element={<HealthBoardPage />} />
                       <Route path="/premium" element={<PremiumPage />} />
                       <Route path="/test" element={<Navigate to="/playground" replace />} />
                       <Route path="/health" element={<Navigate to="/keys" replace />} />

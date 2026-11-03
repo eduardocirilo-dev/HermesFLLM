@@ -68,11 +68,25 @@ export function resetCurationCache(): void {
 }
 
 let running = false;
+let lastPass: { at: string; probed: number } | null = null;
+let startedAt: number | null = null;
+
+/** For the dashboard: when the last pass ran and when the next one is due. */
+export function curationSchedule(now = Date.now()): { lastPassAt: string | null; lastProbed: number | null; nextPassAt: string | null } {
+  let next: number | null = null;
+  if (startedAt !== null) {
+    const elapsed = Math.max(0, now - startedAt);
+    next = startedAt + (Math.floor(elapsed / CURATION_INTERVAL_MS) + 1) * CURATION_INTERVAL_MS;
+  }
+  return { lastPassAt: lastPass?.at ?? null, lastProbed: lastPass?.probed ?? null, nextPassAt: next ? new Date(next).toISOString() : null };
+}
+
 export async function runCurationPass(): Promise<void> {
   if (running) return;
   running = true;
   try {
     const result = await runModelProbePass({ maxProbes: CURATION_MAX_PROBES });
+    lastPass = { at: new Date().toISOString(), probed: Array.isArray((result as any)?.probed) ? (result as any).probed.length : 0 };
     resetCurationCache();
     console.log(`[Curation] pass done: ${JSON.stringify(result)}; curated out: ${curatedOutModels().size} model(s)`);
   } finally {
@@ -89,6 +103,7 @@ export function startCuration(scheduler: Scheduler): void {
   console.log(`[Curation] re-evaluating models every ${CURATION_INTERVAL_MS / 3_600_000}h (max ${CURATION_MAX_PROBES} probes/pass)`);
   // First pass shortly after boot so a fresh install learns quickly, then on the interval.
   scheduler.after(2 * 60 * 1000, () => runCurationPass().catch(err => console.error('[Curation] pass failed:', err)));
+  startedAt = Date.now();
   cancel = scheduler.every(CURATION_INTERVAL_MS, () => runCurationPass().catch(err => console.error('[Curation] pass failed:', err)), { name: 'hermesfllm-curation' });
 }
 
