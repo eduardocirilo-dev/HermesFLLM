@@ -22,7 +22,7 @@ function reserve() {
     if (!m) return null;
     const p = db.prepare(`SELECT status, last_probed_at FROM model_probe_status
                            WHERE platform = ? AND model_id = ? AND endpoint_scope = ?
-                           ORDER BY last_probed_at DESC LIMIT 1`).get(m.platform, m.model_id, m.endpoint_scope ?? '') as { status: string; last_probed_at: string } | undefined;
+                           ORDER BY julianday(last_probed_at) DESC LIMIT 1`).get(m.platform, m.model_id, m.endpoint_scope ?? '') as { status: string; last_probed_at: string } | undefined;
     return { platform: m.platform, modelId: m.model_id, name: m.display_name ?? m.model_id, lastStatus: p?.status ?? null, lastProbedAt: p?.last_probed_at ?? null };
   }).filter((x): x is NonNullable<typeof x> => x !== null);
 }
@@ -36,8 +36,9 @@ export function buildHealthBoard(now = Date.now()) {
            m.display_name, m.intelligence_rank
       FROM model_probe_status p
       LEFT JOIN models m ON m.platform = p.platform AND m.model_id = p.model_id AND COALESCE(m.endpoint_scope, '') = COALESCE(p.endpoint_scope, '')
-     WHERE p.last_probed_at >= ?
-     ORDER BY p.last_probed_at DESC
+     -- julianday(): last_probed_at mixes ISO and SQLite datetime formats (see services/curation.ts).
+     WHERE julianday(p.last_probed_at) >= julianday(?)
+     ORDER BY julianday(p.last_probed_at) DESC
   `).all(since) as Array<{ platform: string; model_id: string; status: string; last_probed_at: string; latency_ms: number | null; last_error: string | null; display_name: string | null; intelligence_rank: number | null }>;
 
   // A model is excluded when every fresh probe failed (same rule as services/curation.ts).
