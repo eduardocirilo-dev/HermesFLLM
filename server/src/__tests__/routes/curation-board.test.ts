@@ -57,4 +57,9 @@ describe('buildHealthBoard', () => {
     expect(board.topModels[1].successRate).toBe(0.5);
     expect(board.traffic.requests24h).toBe(14);
   });
+
+  it('reports the first-token race, on by default', () => {
+    const board = buildHealthBoard();
+    expect(board.race).toMatchObject({ enabled: true, races: expect.any(Number), backupWins: expect.any(Number), minDelayMs: 3000, maxDelayMs: 15000 });
+  });
 });

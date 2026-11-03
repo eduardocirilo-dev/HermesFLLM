@@ -1,4 +1,5 @@
 import { noteLiveFailure } from '../services/curation.js';
+import { raceDispatch } from './hermes-race.js';
 import { nextMonthResetAt } from '../services/key-budget.js';
 import { benchCloudflareAccount } from '../services/cloudflare-daily-quota.js';
 // One shared provider retry/fallback loop for every OpenAI-, Responses- and
@@ -1260,6 +1261,13 @@ export interface DispatchContext {
    * call, including when hedging is not armed at all. See FallbackHooks.dispatch.
    */
   disarmHedge(): void;
+  /**
+   * HermesFLLM first-token race (lib/hermes-race.ts), present only while racing. Call it at the
+   * first token, before writing anything: false means a rival already won, so stop at once.
+   */
+  firstToken?(): boolean;
+  /** Aborted when this attempt loses the race; compose it into the upstream fetch signal. */
+  raceSignal?: AbortSignal;
 }
 
 // Per-request exhaustion metadata handed to the exhaustion hooks, so each
@@ -1305,6 +1313,10 @@ export interface FallbackHooks {
   // model+key only when that attempt ate the whole budget by itself (see the
   // isHedgeAbortError branch below). Absent = pre-v2 behavior.
   abortInFlight?: () => void;
+  // HermesFLLM first-token race: when present, an attempt whose model stays silent past
+  // delayMs(route) races the next-best model, and the first to produce a token wins
+  // (lib/hermes-race.ts). The surface's dispatch must honour ctx.firstToken / ctx.raceSignal.
+  race?: { delayMs(route: RouteResult): number };
   // Skip state; recordRetryableFailure / recordAuthFailure (called by the loop)
   // mutate it, and the surface's route() reads it to exclude failed keys/models.
   state: FallbackState;
@@ -1484,13 +1496,13 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
     // the provider's actual words, which is exactly what the dashboard's
     // drill-down needs to answer "why did this hop fail".
     const attemptStartedAt = Date.now();
-    const traceAttempt = (outcome: AttemptOutcome, err?: any): void => {
+    const traceAttempt = (outcome: AttemptOutcome, err?: any, traced: RouteResult = route): void => {
       trace.records.push({
         ordinal: trace.records.length,
-        platform: route.platform,
-        modelId: route.modelId,
-        keyOrdinal: keyOrdinal(route),
-        keyLabel: route.keyLabel ?? null,
+        platform: traced.platform,
+        modelId: traced.modelId,
+        keyOrdinal: keyOrdinal(traced),
+        keyLabel: traced.keyLabel ?? null,
         outcome,
         startOffsetMs: attemptStartedAt - startedAt,
         durationMs: Date.now() - attemptStartedAt,
@@ -1536,7 +1548,43 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       // otherwise the global proxy / direct path applies as before. The URL
       // arrives already decrypted on the route (services/router.ts), so an
       // attempt costs nothing extra — no query, no decrypt.
-      outcome = await withKeyProxy(route.proxyUrl, () => hooks.dispatch(route, attempt, { disarmHedge }));
+      if (hooks.race) {
+        // HermesFLLM: race a backup model if this one stays silent (lib/hermes-race.ts).
+        const primaryRoute = route;
+        outcome = await raceDispatch({
+          primary: primaryRoute,
+          attempt,
+          delayMs: hooks.race.delayMs(primaryRoute),
+          dispatch: (r, n, ctx) => hooks.dispatch(r, n, ctx),
+          disarmHedge,
+          pickBackup: () => {
+            const alreadySkipped = hooks.state.skipModels.has(primaryRoute.modelDbId);
+            hooks.state.skipModels.add(primaryRoute.modelDbId);
+            try {
+              return hooks.route(attempt);
+            } finally {
+              if (!alreadySkipped) hooks.state.skipModels.delete(primaryRoute.modelDbId);
+            }
+          },
+          recordSideFailure: (r, err) => {
+            hooks.logFailure(r, err, attempt);
+            if (isKeyAuthError(err)) {
+              recordAuthFailure(r, hooks.state);
+              attempts.push({ platform: r.platform, modelId: r.modelId, keyOrdinal: keyOrdinal(r), errorClass: 'auth' });
+              traceAttempt('auth', err, r);
+            } else {
+              recordRetryableFailure(r, err, hooks.state);
+              const errorClass = classifyAttemptError(err);
+              attempts.push({ platform: r.platform, modelId: r.modelId, keyOrdinal: keyOrdinal(r), errorClass });
+              traceAttempt(errorClass, err, r);
+            }
+            lastError = err;
+          },
+          setRoute: (r) => { route = r; },
+        });
+      } else {
+        outcome = await withKeyProxy(route.proxyUrl, () => hooks.dispatch(route, attempt, { disarmHedge }));
+      }
     } catch (err: any) {
       // Client-caused abort: the composed fetch signal fired because OUR
       // client hung up mid-attempt (see newClientAbortError). Not a

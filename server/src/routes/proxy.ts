@@ -1,4 +1,5 @@
 import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME, attemptDeadlineMs, agentDeadlineError } from '../lib/hermes-auto.js';
+import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
 import crypto from 'crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -2534,6 +2535,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     logIdentity: { surface: 'chat completions', requestId: requestGroupId, requestedModel: requestedModelLabel },
     clientGone: () => clientGone,
     abortInFlight: () => hedgeAbort.abort(newHedgeAbortError()),
+    // HermesFLLM first-token race for auto-routed turns. Not for a pinned model (the client asked
+    // for that one), nor with #1642 keep-alive pings on (a ping commits the stream before any token).
+    race: isRaceEnabled() && pinnedModelId == null && !(stream && streamKeepaliveMs() > 0)
+      ? { delayMs: (r) => raceDelayMs(r.modelDbId) }
+      : undefined,
     route: () => {
       // When a handoff could fire this turn, pad the token estimate so the router's
       // context-window and TPM checks account for the extra system message overhead.
@@ -2718,7 +2724,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
         try {
           const gen = route.provider.streamChatCompletion(
             route.apiKey, outboundMessages, route.modelId,
-            { temperature, max_tokens, top_p, stop, tools, tool_choice, parallel_tool_calls, stream_options: parsed.data.stream_options, ...samplingParams, contextBudget, signal: AbortSignal.any([clientAbort.signal, hedgeAbort.signal, deadlineAbort.signal]) },
+            { temperature, max_tokens, top_p, stop, tools, tool_choice, parallel_tool_calls, stream_options: parsed.data.stream_options, ...samplingParams, contextBudget, signal: AbortSignal.any([clientAbort.signal, hedgeAbort.signal, deadlineAbort.signal, ...(ctx.raceSignal ? [ctx.raceSignal] : [])]) },
             quotaContextForRoute(route, 'chat/completions'),
           );
 
@@ -2805,10 +2811,14 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             // stream and never commit early, so waiting for the commit would cancel a model that is
             // steadily writing a long tool call. A role-only preamble does not count. Mid-stream
             // stalls stay with the upstream stall watchdog (PROVIDER_STREAM_STALL_TIMEOUT_MS).
-            if (deadlineTimer && (text.length > 0 || reasoning.length > 0 || (choice.delta?.tool_calls?.length ?? 0) > 0)) {
+            const firstTokenNow = text.length > 0 || reasoning.length > 0 || (choice.delta?.tool_calls?.length ?? 0) > 0;
+            if (deadlineTimer && firstTokenNow) {
               clearTimeout(deadlineTimer);
               deadlineTimer = undefined;
             }
+            // HermesFLLM first-token race: claim the turn before writing anything; a rival that
+            // already claimed it means this attempt lost and must stop without a byte.
+            if (firstTokenNow && ctx.firstToken && !ctx.firstToken()) throw raceLostError();
 
             // #764: ttfb = first token of ANY kind, not just visible content —
             // reasoning models stream thinking long before the first answer
@@ -3101,6 +3111,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // client-abort branch stops the ladder without benching or an
           // error log row (the socket is gone; nothing to render).
           if (isClientAbortError(streamErr)) throw streamErr;
+          // Lost the first-token race: a rival is answering, so leave quietly (nothing was written).
+          if (ctx.raceSignal?.aborted && !(headerSent || headersSentEarly)) throw raceLostError();
           if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = undefined; }
           // Our own deadline fired before anything was committed: fail over to the next model.
           if (deadlineAbort.signal.aborted && !(headerSent || headersSentEarly)) {
@@ -3142,7 +3154,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
       } else {
         const result = await route.provider.chatCompletion(
           route.apiKey, outboundMessages, route.modelId,
-          { temperature, max_tokens, top_p, stop, tools, tool_choice, parallel_tool_calls, ...samplingParams, contextBudget, signal: AbortSignal.any([clientAbort.signal, hedgeAbort.signal]) },
+          { temperature, max_tokens, top_p, stop, tools, tool_choice, parallel_tool_calls, ...samplingParams, contextBudget, signal: AbortSignal.any([clientAbort.signal, hedgeAbort.signal, ...(ctx.raceSignal ? [ctx.raceSignal] : [])]) },
           quotaContextForRoute(route, 'chat/completions'),
         );
 
@@ -3266,6 +3278,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             if (invalid.length > 0) throw invalidToolArgumentsError(route.displayName, invalid);
           }
         }
+
+        // HermesFLLM first-token race: a validated answer is ready. Claim the turn before any
+        // accounting or write; if a rival already won, drop this one quietly.
+        if (ctx.firstToken && !ctx.firstToken()) throw raceLostError();
 
         // Usage fallback: providers that omit `usage` used to be logged as 0
         // tokens, silently undercounting analytics and the rate-limit ledger.

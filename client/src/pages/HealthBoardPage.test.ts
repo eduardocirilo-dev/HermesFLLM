@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatAgo, formatCountdown, healthTone } from './HealthBoardPage'
+import { formatAgo, formatCountdown, healthTone, raceShares } from './HealthBoardPage'
 
 describe('healthTone', () => {
   it('uses the 95% / 80% thresholds', () => {
@@ -41,5 +41,13 @@ describe('buildLabel', () => {
   })
   it('degrades without a commit or build time', () => {
     expect(buildLabel({ version: 'dev', commit: null, builtAt: '' }, 'updated')).toBe('HermesFLLM vdev')
+  })
+})
+
+describe('raceShares', () => {
+  it('splits the bar by outcome and drops empty segments', () => {
+    expect(raceShares({ races: 0, backupWins: 0, primaryWins: 0, bothFailed: 0 })).toEqual([])
+    const shares = raceShares({ races: 4, backupWins: 3, primaryWins: 1, bothFailed: 0 })
+    expect(shares.map(s => [s.key, s.share])).toEqual([['backup', 0.75], ['primary', 0.25]])
   })
 })
