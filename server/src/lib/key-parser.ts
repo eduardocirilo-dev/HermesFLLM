@@ -429,7 +429,7 @@ export function parseJson(content: string): Array<{ key: string; value: string }
 }
 
 /**
- * Parse the FreeLLMAPI export JSON format:
+ * Parse the HermesFLLM export JSON format:
  * { version: 1, exportedAt, source, keys: [{ platform, key, label, baseUrl? }] }
  * Returns key-value pairs compatible with toParsedKeys().
  */
@@ -829,7 +829,7 @@ export function parseKeysFromFile(content: string, filename: string): ParseResul
   if (ext === '.json' || ext === '.jsonc') {
     const clean = stripTrailingCommas(stripJsoncComments(text));
 
-    // Check for FreeLLMAPI export format first (version + keys array)
+    // Check for HermesFLLM export format first (version + keys array)
     const exportResult = parseExportJson(clean);
     if (exportResult) return exportResult;
 

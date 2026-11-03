@@ -232,7 +232,7 @@ describe('MCP server (/mcp, stateless Streamable HTTP)', () => {
     });
     expect(body.error).toBeUndefined();
     expect(body.result.isError).toBe(true);
-    expect(body.result.content[0].text).toContain('FreeLLMAPI inference failed (404)');
+    expect(body.result.content[0].text).toContain('HermesFLLM inference failed (404)');
     expect(body.result.content[0].text).toContain('definitely-not-a-real-model');
     expect(body.result.content[0].text).toContain('is not in the catalog');
   });

@@ -98,7 +98,7 @@ export function buildModelListing(): ModelListing {
       return {
         id: g.canonicalId,
         name: g.groupLabel,
-        ownedBy: 'freellmapi',
+        ownedBy: 'hermesfllm',
         available,
         enabled: infos.some(i => i.enabled === 1) ? 1 : 0,
         contextWindow: servableContextWindow(infos.map(i => i.context_window)),

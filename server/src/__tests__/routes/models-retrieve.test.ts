@@ -99,7 +99,7 @@ describe('GET /v1/models/:id (models.retrieve)', () => {
   it('resolves the virtual router entries too', async () => {
     const auto = await request(app, 'GET', '/v1/models/auto', undefined, authHeaders());
     expect(auto.status).toBe(200);
-    expect(auto.body).toMatchObject({ id: 'auto', object: 'model', owned_by: 'freellmapi' });
+    expect(auto.body).toMatchObject({ id: 'auto', object: 'model', owned_by: 'hermesfllm' });
 
     const fusion = await request(app, 'GET', '/v1/models/fusion', undefined, authHeaders());
     expect(fusion.status).toBe(200);

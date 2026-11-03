@@ -261,7 +261,7 @@ function mcpInferenceTimeoutMs(): number {
 
 function loopbackChatCompletionsUrl(req: Request): string {
   const port = req.socket.localPort;
-  if (!port) throw new Error('Cannot determine the local FreeLLMAPI port for inference');
+  if (!port) throw new Error('Cannot determine the local HermesFLLM port for inference');
 
   let address = (req.socket.localAddress || '127.0.0.1').split('%')[0];
   if (address === '0.0.0.0') address = '127.0.0.1';
@@ -326,17 +326,17 @@ async function askFreeLlmApi(args: Record<string, unknown>, req: Request, res: R
     try {
       payload = raw ? JSON.parse(raw) : null;
     } catch {
-      throw new Error(`FreeLLMAPI inference returned non-JSON data (HTTP ${response.status})`);
+      throw new Error(`HermesFLLM inference returned non-JSON data (HTTP ${response.status})`);
     }
 
     if (!response.ok) {
       const upstreamMessage = payload?.error?.message ?? payload?.message ?? `HTTP ${response.status}`;
-      throw new Error(`FreeLLMAPI inference failed (${response.status}): ${sanitizeProviderErrorMessage(upstreamMessage)}`);
+      throw new Error(`HermesFLLM inference failed (${response.status}): ${sanitizeProviderErrorMessage(upstreamMessage)}`);
     }
 
     const answer = assistantText(payload);
     if (!answer) {
-      throw new Error(`FreeLLMAPI inference returned no assistant text (finish_reason: ${payload?.choices?.[0]?.finish_reason ?? 'unknown'})`);
+      throw new Error(`HermesFLLM inference returned no assistant text (finish_reason: ${payload?.choices?.[0]?.finish_reason ?? 'unknown'})`);
     }
 
     return {
@@ -357,7 +357,7 @@ async function askFreeLlmApi(args: Record<string, unknown>, req: Request, res: R
     };
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      throw new Error(`FreeLLMAPI inference timed out or was cancelled after ${timeoutMs}ms`);
+      throw new Error(`HermesFLLM inference timed out or was cancelled after ${timeoutMs}ms`);
     }
     throw error;
   } finally {
@@ -429,14 +429,14 @@ const READ_ONLY_LOCAL = { readOnlyHint: true, destructiveHint: false, openWorldH
 
 const TOOLS: Record<string, McpTool> = {
   ask_freellmapi: {
-    title: 'Ask FreeLLMAPI',
-    description: 'Use this when the user explicitly wants a FreeLLMAPI model to answer, analyze, rewrite, summarize, or generate text. Routes through the configured free-provider pool. Defaults to the server\'s MCP_INFERENCE_DEFAULT_MODEL (auto when unset). Returns the answer plus model, routing, cache, execution, and token-usage metadata.',
+    title: 'Ask HermesFLLM',
+    description: 'Use this when the user explicitly wants a HermesFLLM model to answer, analyze, rewrite, summarize, or generate text. Routes through the configured free-provider pool. Defaults to the server\'s MCP_INFERENCE_DEFAULT_MODEL (auto when unset). Returns the answer plus model, routing, cache, execution, and token-usage metadata.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        prompt: { type: 'string', minLength: 1, maxLength: 400_000, description: 'The complete task or question for the selected FreeLLMAPI model.' },
-        system: { type: 'string', minLength: 1, maxLength: 50_000, description: 'Optional system instructions for the FreeLLMAPI model.' },
+        prompt: { type: 'string', minLength: 1, maxLength: 400_000, description: 'The complete task or question for the selected HermesFLLM model.' },
+        system: { type: 'string', minLength: 1, maxLength: 50_000, description: 'Optional system instructions for the HermesFLLM model.' },
         model: { type: 'string', minLength: 1, maxLength: 256, description: 'Model id, named chain, or auto. Omit to use MCP_INFERENCE_DEFAULT_MODEL.' },
         temperature: { type: 'number', minimum: 0, maximum: 2 },
         max_tokens: { type: 'integer', minimum: 1, maximum: 32_768 },
@@ -465,15 +465,15 @@ const TOOLS: Record<string, McpTool> = {
     run: (args, req, res) => askFreeLlmApi(args, req, res),
   },
   healthcheck: {
-    title: 'Check FreeLLMAPI readiness',
-    description: 'Check whether FreeLLMAPI is ready for ChatGPT calls, including MCP state, configured/healthy providers, available models, the default MCP inference model, and web search readiness per engine (search.status, search.engines, search.missing_from_catalog). This does not spend provider or search quota.',
+    title: 'Check HermesFLLM readiness',
+    description: 'Check whether HermesFLLM is ready for ChatGPT calls, including MCP state, configured/healthy providers, available models, the default MCP inference model, and web search readiness per engine (search.status, search.engines, search.missing_from_catalog). This does not spend provider or search quota.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: READ_ONLY_LOCAL,
     run: () => healthcheck(),
   },
   list_models: {
-    title: 'List FreeLLMAPI models',
-    description: 'List the models this FreeLLMAPI router can serve, with context windows, tool support, and the parameters each model honors (supported_parameters). Defaults to only models that are usable right now.',
+    title: 'List HermesFLLM models',
+    description: 'List the models this HermesFLLM router can serve, with context windows, tool support, and the parameters each model honors (supported_parameters). Defaults to only models that are usable right now.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -491,7 +491,7 @@ const TOOLS: Record<string, McpTool> = {
     run: () => providerHealth(),
   },
   usage_summary: {
-    title: 'Summarize FreeLLMAPI usage',
+    title: 'Summarize HermesFLLM usage',
     description: 'Request/token totals, success rate, and the top models by traffic for a recent window.',
     inputSchema: {
       type: 'object',
@@ -531,7 +531,7 @@ const TOOLS: Record<string, McpTool> = {
   },
   web_search: {
     title: 'Search the web',
-    description: 'Search the web through the search providers configured in FreeLLMAPI (Parallel, Tavily, Exa, Firecrawl, Linkup, Keenable, or a custom search endpoint). Returns titles, URLs and short extracts. Spends the search provider\'s free quota, not model tokens.',
+    description: 'Search the web through the search providers configured in HermesFLLM (Parallel, Tavily, Exa, Firecrawl, Linkup, Keenable, or a custom search endpoint). Returns titles, URLs and short extracts. Spends the search provider\'s free quota, not model tokens.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -596,7 +596,7 @@ async function dispatchRpc(msg: JsonRpcRequest, id: number | string | null, req:
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
         serverInfo: { name: 'freellmapi', version: '1.0.0' },
-        instructions: 'Use ask_freellmapi when the user explicitly asks FreeLLMAPI or one of its models to perform a text task. Use healthcheck before troubleshooting availability; list_models for model choice; provider_health, provider_list, usage_summary, cache_stats, compression_stats, quota_outlook, and routing_info for diagnostics. set_routing_strategy changes server state. web_search searches the web through the configured search providers. clear_cache flushes cached responses.',
+        instructions: 'Use ask_freellmapi when the user explicitly asks HermesFLLM or one of its models to perform a text task. Use healthcheck before troubleshooting availability; list_models for model choice; provider_health, provider_list, usage_summary, cache_stats, compression_stats, quota_outlook, and routing_info for diagnostics. set_routing_strategy changes server state. web_search searches the web through the configured search providers. clear_cache flushes cached responses.',
       });
     }
     case 'ping':

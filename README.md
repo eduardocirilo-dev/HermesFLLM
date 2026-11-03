@@ -1,3 +1,64 @@
+# HermesFLLM
+
+**HermesFLLM** is a fork of [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) by Tashfeen
+Ahmed (MIT, see [`LICENSE`](LICENSE)), tuned to serve as the model router for
+[Hermes Agent](https://github.com/NousResearch). It is not affiliated with FreeLLMAPI or Nous Research.
+
+It is the same router (one OpenAI-compatible `/v1` endpoint over the free tiers of many
+providers), with:
+
+- **HermesFLLM branding** in the dashboard and API (`owned_by: hermesfllm`), so it can run next to
+  an unmodified FreeLLMAPI install without confusion.
+- **launchd service for macOS** (`scripts/launchd/install.sh`): starts at login and restarts if it
+  dies, so the router is already up when Hermes probes `/v1/models`.
+- **Hermes plugin** (`hermes-plugin/hermesfllm/`): `hermesfllm_status` and `hermesfllm_stop` tools.
+- **`scripts/hermes-setup.sh`**: prints, without writing anything, the `~/.hermes/config.yaml`
+  changes that make HermesFLLM the primary provider.
+
+## Quick start (macOS, Node)
+
+```bash
+git clone https://github.com/eduardocirilo-dev/HermesFLLM.git
+cd HermesFLLM
+npm install && npm run build
+ENCRYPTION_KEY="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+printf "ENCRYPTION_KEY=%s\nPORT=3002\nHOST=127.0.0.1\nNODE_ENV=production\n" "$ENCRYPTION_KEY" > .env
+scripts/launchd/install.sh
+```
+
+Open the dashboard at http://127.0.0.1:3002, add your provider keys and copy your unified API key.
+Port 3002 lets it run beside an existing FreeLLMAPI on 3001; use any free port.
+
+**Keep `HOST=127.0.0.1`.** The router stores your provider keys; without it the server listens on
+all interfaces.
+
+### Use it from Hermes
+
+Point a Hermes provider at `http://127.0.0.1:3002/v1` with your unified key and model `auto`, or run
+`scripts/hermes-setup.sh` to see the suggested
+changes. To install the plugin, link `hermes-plugin/hermesfllm` into `~/.hermes/plugins/` and run
+`hermes plugins enable hermesfllm`.
+
+### Manage the service
+
+```bash
+launchctl kickstart -k gui/$(id -u)/io.github.hermesfllm   # restart (e.g. after npm run build)
+scripts/launchd/install.sh uninstall                       # remove
+```
+
+Logs: `~/Library/Logs/HermesFLLM/hermesfllm.log`.
+
+## Differences from upstream, for maintainers
+
+- User-facing name changed in `client/src` and `server/src`; upstream URLs, env var names
+  (`FREELLMAPI_*`), storage keys and the catalog feed are unchanged so upstream changes merge cleanly.
+- Outbound `User-Agent` / `X-Title` headers to providers still say FreeLLMAPI on purpose: some free
+  tiers may recognise the router by them.
+
+Everything below is the original FreeLLMAPI README.
+
+---
+
 <div align="center">
 
 # FreeLLMAPI
