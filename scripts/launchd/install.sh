@@ -19,6 +19,19 @@ if [ "${1:-}" = "uninstall" ]; then
   exit 0
 fi
 
+# macOS privacy protection (TCC) blocks launchd agents from reading Documents, Desktop, Downloads and
+# iCloud Drive unless the program has been granted access. /bin/bash (which runs run.sh) has not, so
+# an install there fails at every start with "Operation not permitted" (exit 126). Refuse up front.
+case "$REPO/" in
+  "$HOME/Documents/"*|"$HOME/Desktop/"*|"$HOME/Downloads/"*|"$HOME/Library/Mobile Documents/"*)
+    echo "HermesFLLM is in a folder macOS protects ($REPO)." >&2
+    echo "launchd cannot run it from there. Move it out, then install from the new place, e.g.:" >&2
+    echo "  scripts/launchd/install.sh uninstall" >&2
+    echo "  mv \"$REPO\" ~/Projects/HermesFLLM && cd ~/Projects/HermesFLLM && scripts/launchd/install.sh" >&2
+    exit 1
+    ;;
+esac
+
 # better-sqlite3 is a native module: record the Node that ran `npm install`. scripts/launchd/run.sh
 # checks it at every start and falls back to nvm's default or PATH if this Node later moves.
 NODE="${HERMESFLLM_NODE:-$(command -v node)}"
