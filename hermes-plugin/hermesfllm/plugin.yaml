@@ -1,7 +1,7 @@
 name: hermesfllm
 label: HermesFLLM
 kind: standalone
-version: 0.2.0
+version: 0.2.1
 author: eduardocirilo-dev
 description: >
   Status and stop tools for the HermesFLLM router (a FreeLLMAPI fork). The server is kept

@@ -16,17 +16,33 @@ TOOLSET = "hermesfllm"
 LABEL = os.environ.get("HERMESFLLM_LAUNCHD_LABEL", "io.github.hermesfllm")
 
 
+# 3002 is the port the README quick start installs HermesFLLM on; 3001 is upstream FreeLLMAPI's.
+DEFAULT_URL = "http://127.0.0.1:3002"
+
+
 def _url() -> str:
-    return os.environ.get("HERMESFLLM_URL", "http://127.0.0.1:3001").rstrip("/")
+    return os.environ.get("HERMESFLLM_URL", DEFAULT_URL).rstrip("/")
 
 
-def _healthy(url: str, timeout: float = 2.0) -> bool:
-    # /api/ping, not /health: the dashboard answers 200 to any unknown path.
+def _probe(url: str, timeout: float = 2.0) -> dict:
+    """Healthy only if the server at `url` identifies itself as HermesFLLM.
+
+    /api/ping would also answer on an unmodified FreeLLMAPI (often on the neighbouring port), and the
+    dashboard answers 200 with HTML to any unknown path, so the check reads the fork-only JSON
+    endpoint /api/hermesfllm/version and requires its name.
+    """
     try:
-        with urllib.request.urlopen(url + "/api/ping", timeout=timeout) as response:
-            return 200 <= response.status < 300
-    except Exception:
-        return False
+        with urllib.request.urlopen(url + "/api/hermesfllm/version", timeout=timeout) as response:
+            if not 200 <= response.status < 300:
+                return {"healthy": False, "error": f"HTTP {response.status}"}
+            body = json.loads(response.read().decode("utf-8"))
+    except ValueError:
+        return {"healthy": False, "error": "not a HermesFLLM server (no version JSON); check HERMESFLLM_URL"}
+    except Exception as exc:
+        return {"healthy": False, "error": str(exc)[:200]}
+    if not isinstance(body, dict) or body.get("name") != "HermesFLLM":
+        return {"healthy": False, "error": "not a HermesFLLM server; check HERMESFLLM_URL"}
+    return {"healthy": True, "version": body.get("version"), "commit": body.get("commit")}
 
 
 def _run(args: list[str], timeout: float = 15) -> subprocess.CompletedProcess:
@@ -54,7 +70,7 @@ def _launchd_state() -> dict:
 
 def _handle_status(args: dict, **_kw) -> str:
     url = _url()
-    return json.dumps({"healthy": _healthy(url), "url": url, "launchd": _launchd_state()})
+    return json.dumps({**_probe(url), "url": url, "launchd": _launchd_state()})
 
 
 def _handle_stop(args: dict, **_kw) -> str:
@@ -71,7 +87,7 @@ def _handle_stop(args: dict, **_kw) -> str:
 
 STATUS_SCHEMA = {
     "name": "hermesfllm_status",
-    "description": "Report whether the local HermesFLLM router answers /api/ping and the state of its launchd agent.",
+    "description": "Report whether the local HermesFLLM router is up (and its version) and the state of its launchd agent.",
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 

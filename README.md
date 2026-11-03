@@ -58,7 +58,9 @@ stores your provider keys.
 ### Use it from Hermes
 
 Point a Hermes provider at `http://127.0.0.1:3002/v1` with your unified key and model
-`autoTOP-hermes`, or run `scripts/hermes-setup.sh` to see the suggested changes. Give Hermes a
+`autoTOP-hermes`, or run `scripts/hermes-setup.sh` to see the suggested changes. The plugin's
+`hermesfllm_status` checks `http://127.0.0.1:3002` and confirms the server is HermesFLLM (not a
+FreeLLMAPI on another port); set `HERMESFLLM_URL` in Hermes' environment if you chose another port. Give Hermes a
 fallback with a model the fallback provider actually has, so a HermesFLLM outage never sends
 `autoTOP-hermes` to a provider that does not know it.
 
