@@ -25,7 +25,8 @@ const REPROBE_RESERVE_MS = 20 * 60 * 1000;
 // A live failure probes its model this soon (debounced), instead of waiting for the next round.
 const URGENT_DELAY_MS = 30 * 1000;
 
-export const DEFAULT_WEIGHTS = { reliability: 0.6, speed: 0.05, intelligence: 0.35 };
+// Speed carries real weight: an agent times out on a slow model even when its answer is right.
+export const DEFAULT_WEIGHTS = { reliability: 0.55, speed: 0.15, intelligence: 0.3 };
 export const DEFAULT_MIN_RELIABILITY = 0.9;
 const POLICY_APPLIED_KEY = 'hermesfllm_policy_applied';
 const STRATEGY_KEY = 'routing_strategy';
@@ -77,6 +78,37 @@ export function isCuratedOut(entry: { platform: string; model_id: string; endpoi
 
 export function resetCurationCache(): void {
   cache = null;
+  slowCache = null;
+}
+
+// ── Latency ceiling ──────────────────────────────────────────────────────────
+// An agent waits on every turn and gives up at its own timeout (Hermes: 180s). A model that is
+// right but takes minutes still breaks the workflow, so routing sends models whose recent
+// successful answers average above the ceiling to the back of the chain (never excluded).
+
+export const MAX_LATENCY_MS = positiveInt(process.env.HERMESFLLM_MAX_LATENCY_MS, 60 * 1000);
+const LATENCY_WINDOW = '-6 hours';
+const LATENCY_MIN_SAMPLES = 3;
+
+let slowCache: { at: number; ids: Set<number> } | null = null;
+
+/** Models whose successful answers in the last 6h average above MAX_LATENCY_MS. */
+export function slowModelIds(now = Date.now()): Set<number> {
+  if (slowCache && now - slowCache.at < CACHE_MS) return slowCache.ids;
+  const rows = getDb().prepare(`
+    SELECT model_db_id AS id
+      FROM requests
+     WHERE status = 'success' AND model_db_id IS NOT NULL AND created_at >= datetime('now', ?)
+     GROUP BY model_db_id
+    HAVING COUNT(*) >= ? AND AVG(latency_ms) > ?
+  `).all(LATENCY_WINDOW, LATENCY_MIN_SAMPLES, MAX_LATENCY_MS) as Array<{ id: number }>;
+  const ids = new Set(rows.map(r => r.id));
+  slowCache = { at: now, ids };
+  return ids;
+}
+
+export function isTooSlow(modelDbId: number, now = Date.now()): boolean {
+  return slowModelIds(now).has(modelDbId);
 }
 
 // ── Candidate selection ──────────────────────────────────────────────────────
@@ -255,7 +287,7 @@ export function startCuration(scheduler: Scheduler): void {
   if (cancel) return;
   if (process.env.HERMESFLLM_CURATION_ENABLED === '0') return;
   const { applied } = applyDefaultPolicy();
-  if (applied) console.log('[Curation] applied HermesFLLM routing defaults (custom: reliability 0.6, intelligence 0.35, speed 0.05; min reliability 0.9)');
+  if (applied) console.log('[Curation] applied HermesFLLM routing defaults (custom: reliability 0.55, intelligence 0.3, speed 0.15; min reliability 0.9)');
   console.log(`[Curation] continuous: every ${CURATION_INTERVAL_MS / 60_000}m up to ${CURATION_MAX_PROBES} probes, verdicts last ${CURATION_VERDICT_TTL_MS / 60_000}m, cap ${CURATION_DAILY_CAP_PER_PLATFORM}/platform/day`);
   startedAt = Date.now();
   const round = async (): Promise<void> => {

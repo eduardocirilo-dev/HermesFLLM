@@ -111,3 +111,28 @@ describe('runCurationRound', () => {
     expect(curationStatus().urgentQueued).toBe(0);
   });
 });
+
+import { isTooSlow, MAX_LATENCY_MS, resetCurationCache } from '../../services/curation.js';
+
+describe('latency ceiling', () => {
+  function answered(modelDbId: number, latencyMs: number, n: number, status = 'success') {
+    const ins = getDb().prepare(`INSERT INTO requests (platform, model_id, model_db_id, status, latency_ms) VALUES ('p', ?, ?, ?, ?)`);
+    for (let i = 0; i < n; i++) ins.run(`m${modelDbId}`, modelDbId, status, latencyMs);
+  }
+
+  it('flags a model whose recent successes average above the ceiling', () => {
+    answered(1, MAX_LATENCY_MS + 50_000, 3); // the 110-180s case that timed Hermes out
+    answered(2, 8_000, 3);
+    resetCurationCache();
+    expect(isTooSlow(1)).toBe(true);
+    expect(isTooSlow(2)).toBe(false);
+  });
+
+  it('needs a few samples before judging, and ignores failures', () => {
+    answered(3, MAX_LATENCY_MS * 3, 2);
+    answered(4, MAX_LATENCY_MS * 3, 5, 'error');
+    resetCurationCache();
+    expect(isTooSlow(3)).toBe(false);
+    expect(isTooSlow(4)).toBe(false);
+  });
+});

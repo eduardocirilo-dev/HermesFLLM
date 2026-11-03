@@ -1,5 +1,5 @@
 import { getDb, getSetting, setSetting } from '../db/index.js';
-import { isCuratedOut } from './curation.js';
+import { isCuratedOut, isTooSlow } from './curation.js';
 import { isHermesAutoModel } from '../lib/hermes-auto.js';
 import { getProvider, hasProvider, resolveProvider } from '../providers/index.js';
 import { decrypt } from '../lib/crypto.js';
@@ -2332,15 +2332,21 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   // empty pool. An explicit pin keeps its place: the client named that model.
   const servingChain: ChainRow[] = [];
   const marginDeferred: ChainRow[] = [];
+  const slowDeferred: ChainRow[] = [];
   const toolDeferred: ChainRow[] = [];
   for (const e of routableChain) {
     if (requireTools && e.model_db_id !== preferredModelDbId && isToolBenched(e.platform, e.model_id, e.endpoint_scope)) {
       toolDeferred.push(e);
       continue;
     }
+    // HermesFLLM latency ceiling: a slow model (even a sticky one) waits behind the fast ones.
+    if (isTooSlow(e.model_db_id)) {
+      slowDeferred.push(e);
+      continue;
+    }
     (fitsContextWindow(e.platform, e.context_window, estimatedTokens, exactOutputReserve) ? servingChain : marginDeferred).push(e);
   }
-  servingChain.push(...marginDeferred, ...toolDeferred);
+  servingChain.push(...marginDeferred, ...slowDeferred, ...toolDeferred);
 
   for (const entry of servingChain) {
     const label = `${entry.platform}/${entry.model_id}`;

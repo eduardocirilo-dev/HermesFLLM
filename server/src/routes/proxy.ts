@@ -1,4 +1,4 @@
-import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME } from '../lib/hermes-auto.js';
+import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME, attemptDeadlineMs, agentDeadlineError } from '../lib/hermes-auto.js';
 import crypto from 'crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -2606,6 +2606,17 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
         let headerSent = false;
         let ttfbMs: number | null = null;
         const attemptStart = Date.now();
+        // HermesFLLM agent deadline: cancel this attempt if it commits nothing in time (fail over).
+        const deadlineMs = attemptDeadlineMs();
+        const deadlineAbort = new AbortController();
+        let deadlineTimer: NodeJS.Timeout | undefined = deadlineMs > 0
+          ? setTimeout(() => deadlineAbort.abort(agentDeadlineError(route.displayName, deadlineMs)), deadlineMs)
+          : undefined;
+        deadlineTimer?.unref?.();
+        const disarm = () => {
+          ctx.disarmHedge();
+          if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = undefined; }
+        };
 
         // Hold-window state: 'undecided' until the first text either matches
         // a dialect marker (→ 'dialect': buffer everything, rescue at end),
@@ -2670,7 +2681,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           headerSent = true;
           // Committed: the answer is on its way, so the retry budget must no
           // longer cancel this attempt (it could not fail over now anyway).
-          ctx.disarmHedge();
+          disarm();
           for (const p of preamble) {
             const frame = `data: ${JSON.stringify(p)}\n\n`;
             collectFrame(frame);
@@ -2700,14 +2711,14 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             sendSseHeaders();
             // Bytes on the wire = the response can no longer fail over
             // invisibly; stop the retry budget from cancelling it.
-            ctx.disarmHedge();
+            disarm();
             res.write(': keepalive\n\n');
           });
 
         try {
           const gen = route.provider.streamChatCompletion(
             route.apiKey, outboundMessages, route.modelId,
-            { temperature, max_tokens, top_p, stop, tools, tool_choice, parallel_tool_calls, stream_options: parsed.data.stream_options, ...samplingParams, contextBudget, signal: AbortSignal.any([clientAbort.signal, hedgeAbort.signal]) },
+            { temperature, max_tokens, top_p, stop, tools, tool_choice, parallel_tool_calls, stream_options: parsed.data.stream_options, ...samplingParams, contextBudget, signal: AbortSignal.any([clientAbort.signal, hedgeAbort.signal, deadlineAbort.signal]) },
             quotaContextForRoute(route, 'chat/completions'),
           );
 
@@ -3080,6 +3091,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // client-abort branch stops the ladder without benching or an
           // error log row (the socket is gone; nothing to render).
           if (isClientAbortError(streamErr)) throw streamErr;
+          if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = undefined; }
+          // Our own deadline fired before anything was committed: fail over to the next model.
+          if (deadlineAbort.signal.aborted && !(headerSent || headersSentEarly)) {
+            throw deadlineAbort.signal.reason instanceof Error ? deadlineAbort.signal.reason : agentDeadlineError(route.displayName, deadlineMs);
+          }
           // headerSent = real content went out. headersSentEarly also counts:
           // a #1642 keep-alive ping flushed the SSE headers, so the response
           // is on the wire and this attempt can no longer fail over invisibly.
