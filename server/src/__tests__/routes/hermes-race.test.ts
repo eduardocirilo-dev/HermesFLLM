@@ -251,6 +251,27 @@ describe('first-token race', () => {
     expect(raceStats().races).toBe(0);
   });
 
+  it('counts a winner that fails after its first token, so every race lands in one bucket', async () => {
+    // The backup claims the turn with its first tool-call fragment, then calls a tool the agent never
+    // declared: the Agent Guard rejects it and the loop fails over to a third model.
+    const undeclaredCall = async function* (_k: string, _m: unknown, _model: string, opts: { signal?: AbortSignal }) {
+      await wait(20, opts.signal);
+      yield { choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'call_x', type: 'function', function: { name: 'delete_everything', arguments: '' } }] } }] };
+      yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }] };
+      yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+    };
+    streamChatCompletion
+      .mockImplementationOnce(streamAfter(10_000, 'too late'))
+      .mockImplementationOnce(undeclaredCall)
+      .mockImplementation(streamToolCallAfter(10));
+    const { status, raw } = await post(app, { model: 'auto', stream: true, tools: [READ_FILE_TOOL], messages: msg }, key);
+    expect(status).toBe(200);
+    expect(toolCallNames(raw)).toEqual(['read_file']);
+    const s = raceStats();
+    expect(s).toMatchObject({ races: 1, winnerFailed: 1, backupWins: 0, primaryWins: 0, bothFailed: 0 });
+    expect(s.backupWins + s.primaryWins + s.bothFailed + s.winnerFailed).toBe(s.races);
+  });
+
   it('HERMESFLLM_RACE=0 turns it off', async () => {
     process.env.HERMESFLLM_RACE = '0';
     streamChatCompletion.mockImplementation(streamAfter(300, 'only answer'));

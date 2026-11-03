@@ -113,6 +113,8 @@ export interface RaceStats {
   primaryWins: number;
   /** Races where both failed and the loop moved on. */
   bothFailed: number;
+  /** Races whose winner failed after its first token (e.g. Agent Guard rejected its tool call). */
+  winnerFailed: number;
   /** Sum over backup wins of (time the winner answered - when the primary started). */
   backupWinMs: number;
   since: string;
@@ -120,7 +122,7 @@ export interface RaceStats {
 
 let stats: RaceStats = freshStats();
 function freshStats(): RaceStats {
-  return { races: 0, backupWins: 0, primaryWins: 0, bothFailed: 0, backupWinMs: 0, since: new Date().toISOString() };
+  return { races: 0, backupWins: 0, primaryWins: 0, bothFailed: 0, winnerFailed: 0, backupWinMs: 0, since: new Date().toISOString() };
 }
 export function raceStats(): RaceStats {
   return { ...stats };
@@ -276,7 +278,8 @@ export async function raceDispatch(a: RaceArgs): Promise<RaceOutcome> {
     if (winner === r || !rivalsRunning
       || isClientAbortError(err) || isHedgeAbortError(err)
       || (!isRetryableError(err) && !isKeyAuthError(err))) {
-      if (raced() && winner !== r && !rivalsRunning) stats.bothFailed++;
+      if (raced() && winner === r) stats.winnerFailed++;
+      else if (raced() && !rivalsRunning) stats.bothFailed++;
       finish(r);
       throw err;
     }

@@ -2334,7 +2334,15 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
   const marginDeferred: ChainRow[] = [];
   const slowDeferred: ChainRow[] = [];
   const toolDeferred: ChainRow[] = [];
+  // HermesFLLM curation fails open: a model whose recent probes all failed goes to the very back
+  // instead of being dropped, so it is only tried when every other candidate is unavailable. A
+  // probe verdict is a prediction; a 502 with models left untried is a certain failure.
+  const curatedDeferred: ChainRow[] = [];
   for (const e of routableChain) {
+    if (isCuratedOut(e)) {
+      curatedDeferred.push(e);
+      continue;
+    }
     if (requireTools && e.model_db_id !== preferredModelDbId && isToolBenched(e.platform, e.model_id, e.endpoint_scope)) {
       toolDeferred.push(e);
       continue;
@@ -2346,7 +2354,9 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     }
     (fitsContextWindow(e.platform, e.context_window, estimatedTokens, exactOutputReserve) ? servingChain : marginDeferred).push(e);
   }
-  servingChain.push(...marginDeferred, ...slowDeferred, ...toolDeferred);
+  servingChain.push(...marginDeferred, ...slowDeferred, ...toolDeferred, ...curatedDeferred);
+  const curatedSet = new Set(curatedDeferred);
+  let curatedFailOpenLogged = false;
 
   for (const entry of servingChain) {
     const label = `${entry.platform}/${entry.model_id}`;
@@ -2393,8 +2403,11 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     // put on cooldown — so this is a fast-path, not the only guard. If every
     // model is too small, the loop falls through and the caller gets the normal
     // "all models exhausted" error rather than a wasted sweep.
-    // HermesFLLM curation: a model whose recent probes all failed is skipped until it passes again.
-    if (isCuratedOut(entry)) { diag.push(`${label}: failed the last curation probes`); continue; }
+    // HermesFLLM curation: reaching a curated-out model means everything ahead of it was unavailable.
+    if (curatedSet.has(entry) && !curatedFailOpenLogged) {
+      curatedFailOpenLogged = true;
+      console.warn(`[Curation] fail-open: no non-excluded model can serve this request, trying excluded ${label}`);
+    }
 
     if (!fitsContextWindowStrict(entry.context_window, estimatedTokens)) {
       // Keep the `< estimated` substring — summarizeExhaustion buckets prompt

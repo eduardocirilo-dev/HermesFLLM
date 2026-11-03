@@ -1357,7 +1357,7 @@
     "agentTested": "agent-tested",
     "raceTitle": "First-token race",
     "raceRescued": "turns a backup model answered first (since restart {since} ago)",
-    "raceSummary": "{races} races: backup won {backup}, original held {primary}, both failed {both}",
+    "raceSummary": "{races} races: backup won {backup}, original held {primary}, winner failed after its first token {winner}, both failed {both}",
     "raceAvg": "Rescued turns started answering after {seconds}s on average",
     "raceIdle": "No race yet: every model answered within its own usual time.",
     "raceDelay": "A backup starts when a model stays silent past its usual p90 first-token time ({min}-{max}s)",
@@ -1380,7 +1380,9 @@
     "shadowLowerBetter": "lower is better",
     "shadowRaceSplit": "HermesFLLM first token with the race: {raced} ({racedN} turns), without it: {notRaced} ({notRacedN} turns). FreeLLMAPI has no race.",
     "shadowTooFew": "Not enough data to decide: {pairs} of {min} identical turns.",
-    "shadowVerdict": "HermesFLLM is better on {wins} of {total} metrics, over {pairs} identical turns in {days} days (first token compared at p90)."
+    "shadowVerdict": "HermesFLLM is better on {wins} of {total} metrics, over {pairs} identical turns in {days} days (first token compared at p90).",
+    "slow": "slow",
+    "slowHint": "Averages above the latency ceiling: routing sends it to the back of the chain, whatever its success rate"
   },
   "build": {
     "updated": "updated"

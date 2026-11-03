@@ -23,7 +23,10 @@ function harness(overrides: Partial<GovernorConfig> = {}, committed = false) {
 function realText(n: number): string {
   let out = '';
   let i = 0;
-  while (out.length < n) out += `const value${i} = compute(${(i * 7919) % 1009}, "${(i * 104729).toString(36)}");\n`, i++;
+  while (out.length < n) {
+    out += `const value${i} = compute(${(i * 7919) % 1009}, "${(i * 104729).toString(36)}");\n`;
+    i++;
+  }
   return out.slice(0, n);
 }
 

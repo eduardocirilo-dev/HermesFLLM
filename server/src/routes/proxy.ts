@@ -3119,7 +3119,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           logRequest(route.platform, route.modelId, route.keyId, 'success', inputTokens, outputTokens, Date.now() - start, null, ttfbMs, pinnedModelId,
             observeServedModel({ platform: route.platform, requestedModel: route.modelId, servedModel: upstreamModel }), 'http');
           return 'done';
-        } catch (streamErr: any) {
+        } catch (caughtStreamErr: any) {
+          let streamErr = caughtStreamErr;
           // Client abort mid-stream: the pump's own `if (clientGone) break`
           // can lose the race against the fetch-signal rejection, so the
           // abort may surface here instead. Rethrow — the shared loop's
