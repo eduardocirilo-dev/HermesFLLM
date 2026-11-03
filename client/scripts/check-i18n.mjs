@@ -15,6 +15,13 @@ const expectedLocales = [
   'fi', 'no', 'sk', 'bg', 'hr', 'sr', 'lt', 'zh-TW', 'pt-PT', 'ka',
 ]
 
+// HermesFLLM: keys that exist only in this fork. They are translated in en, pt-PT and pt-BR; other
+// locales may omit them and fall back to English at runtime (I18nProvider). Kept here rather than
+// as English copies in every locale file so upstream locale changes keep merging cleanly. When a
+// locale does carry them, the type and placeholder checks below still apply.
+const forkOnlyKeys = new Set(['nav.health', 'build.updated'])
+const isForkOnlyKey = key => key.startsWith('healthBoard.') || forkOnlyKeys.has(key)
+
 function flatten(value, prefix = '', output = new Map()) {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     for (const [key, child] of Object.entries(value)) {
@@ -52,7 +59,7 @@ for (const locale of actualLocales) {
   )
   const entries = flatten(dictionary)
   const keys = new Set(entries.keys())
-  const missingKeys = [...englishKeys].filter(key => !keys.has(key))
+  const missingKeys = [...englishKeys].filter(key => !keys.has(key) && !isForkOnlyKey(key))
   const extraKeys = [...keys].filter(key => !englishKeys.has(key))
 
   if (missingKeys.length) {

@@ -22,6 +22,8 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.platform }})
+    # HermesFLLM: publishes under the upstream FreeLLMAPI name; only runs in the upstream repo.
+    if: github.repository_owner == 'tashfeenahmed'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -94,7 +96,8 @@ jobs:
 
   merge:
     name: Merge manifest and push
-    if: github.event_name != 'pull_request'
+    # HermesFLLM: publishes under the upstream FreeLLMAPI name; only runs in the upstream repo.
+    if: github.repository_owner == 'tashfeenahmed' && (github.event_name != 'pull_request')
     runs-on: ubuntu-24.04
     needs: [build]
     steps:

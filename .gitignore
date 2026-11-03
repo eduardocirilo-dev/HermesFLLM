@@ -25,3 +25,6 @@ update-hermes.sh
 
 # Monetization planning — private, never committed
 monetization/
+
+# HermesFLLM: Python bytecode from the Hermes plugin tests
+__pycache__/
