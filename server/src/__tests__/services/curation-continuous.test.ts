@@ -171,6 +171,7 @@ describe('agent probe', () => {
 });
 
 import { isBusyProbeError } from '../../services/curation.js';
+import { buildHealthBoard } from '../../routes/curation.js';
 
 describe('busy providers are inconclusive', () => {
   it('recognises overload answers but not real tool failures', () => {
@@ -179,6 +180,24 @@ describe('busy providers are inconclusive', () => {
     expect(isBusyProbeError('Groq API error 429: rate limit reached')).toBe(true);
     expect(isBusyProbeError('NaraRouter API error 400: The model rejected this request')).toBe(false);
     expect(isBusyProbeError('no valid tool call: answered without calling a tool')).toBe(false);
+  });
+
+  // Regression: the inconclusive path stamps last_probed_at with SQLite datetime('now'), the
+  // verdict path with ISO. Compared as text the fresh SQLite stamp read as stale, so a busy
+  // probe lifted the exclusion and the model vanished from the health board.
+  it('a busy probe keeps an excluded model excluded, in routing and on the health board', async () => {
+    probe('m1', 'unavailable', minutesAgo(15));
+    expect(isCuratedOut({ platform: 'p', model_id: 'm1', endpoint_scope: '' })).toBe(true);
+
+    const round = await runCurationRound({ chat: async c => { if (c.modelId === 'm1') throw new Error('API error 503: high demand'); } });
+    expect(round?.results.find(r => r.modelId === 'm1')).toMatchObject({ reason: 'excluded', status: 'error' });
+    const stamp = (getDb().prepare(`SELECT last_probed_at FROM model_probe_status WHERE model_id = 'm1'`).get() as { last_probed_at: string }).last_probed_at;
+    expect(stamp).not.toContain('T'); // the inconclusive path's SQLite format: the case under test
+
+    expect(isCuratedOut({ platform: 'p', model_id: 'm1', endpoint_scope: '' })).toBe(true);
+    expect(buildHealthBoard().curation.excluded.map(m => m.modelId)).toEqual(['m1']);
+    // Just probed: not picked again in the next round.
+    expect(selectCurationCandidates().map(c => c.modelId)).not.toContain('m1');
   });
 
   it('a busy probe does not exclude the model', async () => {

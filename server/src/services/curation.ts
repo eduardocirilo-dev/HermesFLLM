@@ -50,6 +50,10 @@ export function applyDefaultPolicy(): { applied: boolean } {
   return { applied: true };
 }
 
+// last_probed_at holds two formats: verdicts are written as ISO ('2026-11-03T14:00:00.000Z'), the
+// inconclusive path as SQLite datetime('now') ('2026-11-03 14:00:00'). Compared as text, ' ' sorts
+// before 'T', so a fresh SQLite-format row read as older than any same-day ISO cutoff and a busy
+// probe silently lifted an exclusion. Compare and order through julianday(), which reads both.
 const modelKey = (platform: string, modelId: string, scope: string | null | undefined) => `${platform}\u0000${modelId}\u0000${scope ?? ''}`;
 const parseTs = (ts: string) => Date.parse(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
 
@@ -65,7 +69,7 @@ export function curatedOutModels(now = Date.now()): Set<string> {
   const rows = getDb().prepare(`
     SELECT platform, model_id, endpoint_scope
       FROM model_probe_status
-     WHERE last_probed_at >= ?
+     WHERE julianday(last_probed_at) >= julianday(?)
      GROUP BY platform, model_id, endpoint_scope
     HAVING SUM(status = 'unavailable') > 0 AND SUM(status = 'working') = 0
   `).all(since) as Array<{ platform: string; model_id: string; endpoint_scope: string | null }>;
@@ -129,7 +133,7 @@ function candidateForModel(modelDbId: number): (ProbeCandidate & { lastProbedAt:
             ON p.platform = m.platform AND p.model_id = m.model_id
            AND p.endpoint_scope = m.endpoint_scope AND p.key_id = k.id
      WHERE m.id = ? AND m.enabled = 1 AND m.supports_tools = 1
-     ORDER BY (p.last_probed_at IS NULL) DESC, p.last_probed_at ASC, k.id ASC
+     ORDER BY (p.last_probed_at IS NULL) DESC, julianday(p.last_probed_at) ASC, k.id ASC
      LIMIT 1
   `).get(modelDbId) as (ProbeCandidate & { lastProbedAt: string }) | undefined;
   return row ?? null;
@@ -138,10 +142,12 @@ function candidateForModel(modelDbId: number): (ProbeCandidate & { lastProbedAt:
 /** Newest probe of any key of this model, in ms; 0 when never probed. */
 function lastProbedMs(c: { platform: string; modelId: string; endpointScope: string }): number {
   const row = getDb().prepare(`
-    SELECT MAX(last_probed_at) AS at FROM model_probe_status
-     WHERE platform = ? AND model_id = ? AND endpoint_scope = ?
-  `).get(c.platform, c.modelId, c.endpointScope) as { at: string | null };
-  return row.at ? parseTs(row.at) : 0;
+    SELECT last_probed_at AS at FROM model_probe_status
+     WHERE platform = ? AND model_id = ? AND endpoint_scope = ? AND last_probed_at IS NOT NULL
+     ORDER BY julianday(last_probed_at) DESC
+     LIMIT 1
+  `).get(c.platform, c.modelId, c.endpointScope) as { at: string } | undefined;
+  return row?.at ? parseTs(row.at) : 0;
 }
 
 /** The warm reserve: the models with the best live success rate in the last 24h. */
@@ -165,7 +171,7 @@ function excludedModelIds(now: number): number[] {
     SELECT m.id AS id
       FROM model_probe_status p
       JOIN models m ON m.platform = p.platform AND m.model_id = p.model_id AND m.endpoint_scope = p.endpoint_scope
-     WHERE p.last_probed_at >= ? AND m.enabled = 1
+     WHERE julianday(p.last_probed_at) >= julianday(?) AND m.enabled = 1
      GROUP BY m.id
     HAVING SUM(p.status = 'unavailable') > 0 AND SUM(p.status = 'working') = 0
   `).all(since) as Array<{ id: number }>;
