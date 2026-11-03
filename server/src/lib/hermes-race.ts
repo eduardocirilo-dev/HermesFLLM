@@ -32,6 +32,7 @@ export interface RaceDispatchContext {
   disarmHedge(): void;
   firstToken(): boolean;
   raceSignal: AbortSignal;
+  raceBackup: boolean;
 }
 
 // ── Configuration ───────────────────────────────────────────────────────────
@@ -189,7 +190,7 @@ export async function raceDispatch(a: RaceArgs): Promise<RaceOutcome> {
   const start = (route: RouteResult, backup: boolean): Racer => {
     const ac = new AbortController();
     const racer = { route, backup, ac, settled: false } as Racer;
-    const ctx: RaceDispatchContext = { disarmHedge: a.disarmHedge, firstToken: () => claim(racer), raceSignal: ac.signal };
+    const ctx: RaceDispatchContext = { disarmHedge: a.disarmHedge, firstToken: () => claim(racer), raceSignal: ac.signal, raceBackup: backup };
     racer.promise = Promise.resolve()
       .then(() => withKeyProxy(route.proxyUrl, () => a.dispatch(route, a.attempt, ctx)))
       .then(

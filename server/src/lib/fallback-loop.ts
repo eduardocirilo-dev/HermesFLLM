@@ -1268,6 +1268,8 @@ export interface DispatchContext {
   firstToken?(): boolean;
   /** Aborted when this attempt loses the race; compose it into the upstream fetch signal. */
   raceSignal?: AbortSignal;
+  /** True for the backup model the race started; a backup that wins must not become the session's model. */
+  raceBackup?: boolean;
 }
 
 // Per-request exhaustion metadata handed to the exhaustion hooks, so each

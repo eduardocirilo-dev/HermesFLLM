@@ -3101,7 +3101,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             });
           }
 
-          setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
+          // A race backup answers this turn only; the session keeps its own (stronger) model.
+          if (!ctx.raceBackup) setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
           if (handoffMode !== 'off' && sessionKey) recordSuccessfulModel({ sessionKey, modelKey });
           // #797: remember this turn's thinking trace so the next request from
           // the same session can restore it (clients strip it on replay).
@@ -3327,7 +3328,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
         // from (set to the requested model id at the top of the loop). Matches the
         // streaming success path; without it, "prefer last successful provider"
         // is lost for non-streaming group-pinned sessions. (#341 review)
-        setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
+        // A race backup answers this turn only; the session keeps its own (stronger) model.
+        if (!ctx.raceBackup) setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
         if (handoffMode !== 'off' && sessionKey) recordSuccessfulModel({ sessionKey, modelKey });
 
         res.setHeader('X-Routed-Via', routedViaValue(route.platform, route.modelId));

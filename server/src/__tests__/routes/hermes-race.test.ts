@@ -165,6 +165,35 @@ describe('first-token race', () => {
     expect(raceStats()).toMatchObject({ races: 1, backupWins: 1, primaryWins: 0 });
   });
 
+  it('a backup that wins answers that turn only; the next turn goes back to the session\'s own model', async () => {
+    const first = [{ role: 'user', content: 'sticky check: list the files' }];
+    streamChatCompletion
+      .mockImplementationOnce(streamAfter(10_000, 'too late'))
+      .mockImplementationOnce(streamAfter(20, 'backup answer'));
+    await post(app, { model: 'autoTOP-hermes', stream: true, messages: first }, key);
+    const primaryModel = endings.find(e => e.ended === 'aborted')!.model;
+    const backupModel = endings.find(e => e.ended === 'answered')!.model;
+    expect(backupModel).not.toBe(primaryModel);
+
+    endings.length = 0;
+    streamChatCompletion.mockImplementation(streamAfter(10, 'next turn'));
+    const next = [...first, { role: 'assistant', content: 'backup answer' }, { role: 'user', content: 'and now?' }];
+    await post(app, { model: 'autoTOP-hermes', stream: true, messages: next }, key);
+    // The session was not handed to the backup: the next turn starts on the original pick.
+    expect(endings[0].model).toBe(primaryModel);
+  });
+
+  it('a model that wins on its own still becomes the session\'s model', async () => {
+    const first = [{ role: 'user', content: 'sticky check: primary wins' }];
+    streamChatCompletion.mockImplementation(streamAfter(10, 'primary answer'));
+    await post(app, { model: 'autoTOP-hermes', stream: true, messages: first }, key);
+    const chosen = endings[0].model;
+    endings.length = 0;
+    const next = [...first, { role: 'assistant', content: 'primary answer' }, { role: 'user', content: 'and now?' }];
+    await post(app, { model: 'autoTOP-hermes', stream: true, messages: next }, key);
+    expect(endings[0].model).toBe(chosen);
+  });
+
   it('the primary still wins if it produces its first token before the backup', async () => {
     streamChatCompletion
       .mockImplementationOnce(streamAfter(200, 'primary answer'))
