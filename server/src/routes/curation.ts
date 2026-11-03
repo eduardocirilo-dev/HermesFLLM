@@ -4,6 +4,7 @@ import { getDb } from '../db/index.js';
 import { getCustomWeights, getMinReliabilityFloor, getRoutingStrategy } from '../services/router.js';
 import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, curationStatus, reserveModelIds } from '../services/curation.js';
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
+import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
 // excluded and why, and how many broken agent turns the Agent Guard caught.
@@ -100,6 +101,10 @@ export function buildHealthBoard(now = Date.now()) {
       savedLast24h: guard.day ?? 0,
       savedLast7d: guard.week ?? 0,
     },
+    race: (() => {
+      const { min, max } = raceDelayBounds();
+      return { enabled: isRaceEnabled(), ...raceStats(), minDelayMs: min, maxDelayMs: max };
+    })(),
     traffic: {
       requests24h: traffic.total,
       successRate24h: traffic.total > 0 ? (traffic.ok ?? 0) / traffic.total : null,

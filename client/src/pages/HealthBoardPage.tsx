@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Brain, Clock, Flame, Radar, ShieldCheck, ShieldOff, Trophy, XCircle } from 'lucide-react'
+import { Activity, Brain, Clock, Flame, Radar, ShieldCheck, ShieldOff, Trophy, XCircle, Zap } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
 import { BuildBadge } from '@/components/build-badge'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +27,7 @@ export interface HealthBoard {
     excluded: Array<{ platform: string; modelId: string; name: string; reason: string | null; lastProbedAt: string }>
   }
   agentGuard: { enabled: boolean; savedLast24h: number; savedLast7d: number }
+  race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
   traffic: { requests24h: number; successRate24h: number | null }
   topModels: Array<{ platform: string; modelId: string; name: string; intelligenceRank: number | null; requests: number; successRate: number; avgLatencyMs: number | null }>
 }
@@ -52,6 +53,55 @@ export function formatCountdown(targetIso: string | null, now: number): string |
   const h = Math.floor(ms / 3_600_000)
   const m = Math.floor((ms % 3_600_000) / 60_000)
   return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+/** Shares of the race outcomes, for the stacked bar. Empty when no race ran. */
+export function raceShares(race: { races: number; backupWins: number; primaryWins: number; bothFailed: number }) {
+  if (race.races <= 0) return []
+  return [
+    { key: 'backup', share: race.backupWins / race.races, className: 'bg-emerald-500' },
+    { key: 'primary', share: race.primaryWins / race.races, className: 'bg-sky-500' },
+    { key: 'both', share: race.bothFailed / race.races, className: 'bg-red-500' },
+  ].filter(s => s.share > 0)
+}
+
+function RaceCard({ race, now }: { race: NonNullable<HealthBoard['race']>; now: number }) {
+  const { t } = useI18n()
+  const shares = raceShares(race)
+  const avgS = race.backupWins > 0 ? (race.backupWinMs / race.backupWins / 1000).toFixed(1) : null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className={cn('h-4 w-4', race.enabled ? 'text-amber-500' : 'text-muted-foreground')} />
+          {t('healthBoard.raceTitle')}
+          <Badge variant={race.enabled ? 'default' : 'secondary'} className="ml-auto">
+            {race.enabled ? t('healthBoard.on') : t('healthBoard.off')}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p className="text-4xl font-semibold tabular-nums">{race.backupWins}</p>
+        <p className="text-muted-foreground">{t('healthBoard.raceRescued', { since: formatAgo(race.since, now) })}</p>
+        {shares.length > 0 ? (
+          <>
+            <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden>
+              {shares.map(s => <div key={s.key} className={cn('h-full transition-all', s.className)} style={{ width: `${s.share * 100}%` }} />)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('healthBoard.raceSummary', { races: race.races, backup: race.backupWins, primary: race.primaryWins, both: race.bothFailed })}
+            </p>
+            {avgS && <p className="text-xs text-muted-foreground">{t('healthBoard.raceAvg', { seconds: avgS })}</p>}
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('healthBoard.raceIdle')}</p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          {t('healthBoard.raceDelay', { min: Math.round(race.minDelayMs / 1000), max: Math.round(race.maxDelayMs / 1000) })}
+        </p>
+      </CardContent>
+    </Card>
+  )
 }
 
 export function formatAgo(iso: string, now: number): string {
@@ -127,7 +177,7 @@ export default function HealthBoardPage() {
         </div>
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className={cn('grid gap-4 md:grid-cols-2', data.race ? 'xl:grid-cols-4' : 'xl:grid-cols-3')}>
             <Card>
               <CardContent className="flex items-center gap-5 pt-6">
                 <PulseRing rate={data.traffic.successRate24h} label={t('healthBoard.success24h')} />
@@ -176,6 +226,8 @@ export default function HealthBoardPage() {
                 </p>
               </CardContent>
             </Card>
+
+            {data.race && <RaceCard race={data.race} now={now} />}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">

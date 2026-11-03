@@ -1354,7 +1354,13 @@
     "notProbed": "not probed yet",
     "lastRound": "Last round {ago} ago",
     "agentProbe": "Every probe is a real tool call checked by the Agent Guard",
-    "agentTested": "agent-tested"
+    "agentTested": "agent-tested",
+    "raceTitle": "First-token race",
+    "raceRescued": "turns a backup model answered first (since restart {since} ago)",
+    "raceSummary": "{races} races: backup won {backup}, original held {primary}, both failed {both}",
+    "raceAvg": "Rescued turns started answering after {seconds}s on average",
+    "raceIdle": "No race yet: every model answered within its own usual time.",
+    "raceDelay": "A backup starts when a model stays silent past its usual p90 first-token time ({min}-{max}s)"
   },
   "build": {
     "updated": "updated"

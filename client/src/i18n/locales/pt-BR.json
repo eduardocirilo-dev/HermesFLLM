@@ -1354,7 +1354,13 @@
     "notProbed": "ainda não testado",
     "lastRound": "Última rodada há {ago}",
     "agentProbe": "Cada teste é uma tool call real, verificada pelo Agent Guard",
-    "agentTested": "testado como agente"
+    "agentTested": "testado como agente",
+    "raceTitle": "Corrida pelo primeiro token",
+    "raceRescued": "turnos em que um modelo reserva respondeu primeiro (desde o reinício, há {since})",
+    "raceSummary": "{races} corridas: a reserva venceu {backup}, o original segurou {primary}, ambos falharam {both}",
+    "raceAvg": "Os turnos salvos começaram a responder depois de {seconds}s, em média",
+    "raceIdle": "Nenhuma corrida ainda: todos os modelos responderam dentro do tempo habitual.",
+    "raceDelay": "Uma reserva começa quando um modelo fica em silêncio além do seu p90 habitual até o primeiro token ({min}-{max}s)"
   },
   "build": {
     "updated": "atualizado"
