@@ -19,7 +19,8 @@ if [ "${1:-}" = "uninstall" ]; then
   exit 0
 fi
 
-# better-sqlite3 is a native module: run with the same Node that ran `npm install`.
+# better-sqlite3 is a native module: record the Node that ran `npm install`. scripts/launchd/run.sh
+# checks it at every start and falls back to nvm's default or PATH if this Node later moves.
 NODE="${HERMESFLLM_NODE:-$(command -v node)}"
 [ -x "$NODE" ] || { echo "node not found; set HERMESFLLM_NODE" >&2; exit 1; }
 [ -f "$REPO/server/dist/index.js" ] || { echo "server not built; run npm run build" >&2; exit 1; }
@@ -28,7 +29,8 @@ grep -q '^HOST=' "$REPO/.env" || echo "warning: no HOST= in .env; the server may
 
 mkdir -p "$(dirname "$PLIST")" "$(dirname "$LOG")"
 # '|' as sed delimiter: paths may contain '/' and spaces.
-sed -e "s|__NODE__|$NODE|" -e "s|__SERVER_DIR__|$REPO/server|" -e "s|__LOG__|$LOG|g" \
+sed -e "s|__NODE__|$NODE|" -e "s|__REPO__|$REPO|" -e "s|__SERVER_DIR__|$REPO/server|" \
+  -e "s|__LAUNCHD_LOG__|$(dirname "$LOG")/launchd.log|" -e "s|__LOG__|$LOG|g" \
   "$HERE/$LABEL.plist.template" > "$PLIST"
 plutil -lint "$PLIST" >/dev/null
 launchctl bootstrap "$DOMAIN" "$PLIST"

@@ -109,7 +109,7 @@ launchctl kickstart -k gui/$(id -u)/io.github.hermesfllm   # restart (e.g. after
 scripts/launchd/install.sh uninstall                       # remove
 ```
 
-Logs: `~/Library/Logs/HermesFLLM/hermesfllm.log`. Also included: a Hermes plugin with status/stop
+Logs: `~/Library/Logs/HermesFLLM/hermesfllm.log`, rotated at 10 MB with 3 old files kept (`HERMESFLLM_LOG_MAX_BYTES`, `HERMESFLLM_LOG_KEEP`). The agent starts `scripts/launchd/run.sh`, which picks a Node that can load the native modules at every start: the one that ran `install.sh`, then nvm's default, then PATH. If none can, the log says to run `npm rebuild better-sqlite3`. After updating from a version before 0.10.2, run `scripts/launchd/install.sh` once to switch the agent to it. Also included: a Hermes plugin with status/stop
 tools (`hermes-plugin/hermesfllm/`).
 
 ## Differences from upstream, for maintainers

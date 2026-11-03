@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Filled in by install.sh: __NODE__, __SERVER_DIR__, __LOG__. -->
+<!-- Filled in by install.sh: __NODE__, __REPO__, __SERVER_DIR__, __LOG__, __LAUNCHD_LOG__. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
 	<string>io.github.hermesfllm</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>__NODE__</string>
-		<string>dist/index.js</string>
+		<string>/bin/bash</string>
+		<string>__REPO__/scripts/launchd/run.sh</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- The Node that ran install.sh; run.sh falls back to nvm's default or PATH if it moves. -->
+		<key>HERMESFLLM_NODE</key>
+		<string>__NODE__</string>
+		<!-- run.sh writes and rotates this log itself. -->
+		<key>HERMESFLLM_LOG</key>
+		<string>__LOG__</string>
+	</dict>
 	<key>WorkingDirectory</key>
 	<string>__SERVER_DIR__</string>
 	<key>RunAtLoad</key>
@@ -18,9 +27,10 @@
 	<true/>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<!-- Only run.sh's own crashes land here; the server log is written and rotated by run.sh. -->
 	<key>StandardOutPath</key>
-	<string>__LOG__</string>
+	<string>__LAUNCHD_LOG__</string>
 	<key>StandardErrorPath</key>
-	<string>__LOG__</string>
+	<string>__LAUNCHD_LOG__</string>
 </dict>
 </plist>
