@@ -558,8 +558,9 @@ describe('Anthropic-compatible /v1/messages', () => {
     const { status, body } = await send(app, 'GET', '/v1/models', undefined, { Authorization: `Bearer ${getUnifiedApiKey()}` });
     expect(status).toBe(200);
     expect(body.object).toBe('list'); // OpenAI envelope, served by proxyRouter
-    expect(body.data[0].id).toBe('auto');
-    expect(body.data[0].object).toBe('model');
+    expect(body.data[0].id).toBe('autoTOP-hermes');
+    expect(body.data[1].id).toBe('auto');
+    expect(body.data[1].object).toBe('model');
   });
 
   it('maps a Claude family to a pinned catalog model via the settings API', async () => {

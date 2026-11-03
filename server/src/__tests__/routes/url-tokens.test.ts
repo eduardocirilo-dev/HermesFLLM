@@ -85,7 +85,8 @@ describe('revocable URL-token aliases', () => {
 
     const models = await request(app, 'GET', `/v1/t/${minted.body.token}/models`);
     expect(models.status).toBe(200);
-    expect(models.body.data[0].id).toBe('auto');
+    expect(models.body.data[0].id).toBe('autoTOP-hermes');
+    expect(models.body.data[1].id).toBe('auto');
 
     const chat = await request(app, 'POST', `/v1/t/${minted.body.token}/chat/completions`, {
       messages: [{ role: 'user', content: 'hello' }],

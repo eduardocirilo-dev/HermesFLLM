@@ -1,3 +1,4 @@
+import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME } from '../lib/hermes-auto.js';
 import crypto from 'crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -54,7 +55,7 @@ const AUTO_MODEL_ID = 'auto';
 function isAutoModel(modelId: string | undefined): boolean {
   if (!modelId) return true;
   const lower = modelId.toLowerCase();
-  return lower === AUTO_MODEL_ID || lower.startsWith(`${AUTO_MODEL_ID}:`);
+  return lower === AUTO_MODEL_ID || lower.startsWith(`${AUTO_MODEL_ID}:`) || isHermesAutoModel(modelId);
 }
 
 // timingSafeStringEqual moved to lib/system-prompt.ts (resolveAuth needs it
@@ -459,6 +460,17 @@ function buildCatalogEntries(filters: { onlyAvailable?: boolean; executionStatus
     : listed;
 
   return [
+    {
+      id: HERMES_AUTO_MODEL_ID,
+      object: 'model',
+      created: 0,
+      owned_by: 'hermesfllm',
+      name: `${HERMES_AUTO_MODEL_NAME} (router picks the most reliable, smartest free model)`,
+      context_window: autoContextWindow,
+      context_length: autoContextWindow,
+      available: true,
+      unavailable_reason: null,
+    },
     {
       id: AUTO_MODEL_ID,
       object: 'model',

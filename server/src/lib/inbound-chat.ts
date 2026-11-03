@@ -1,3 +1,4 @@
+import { isHermesAutoModel } from './hermes-auto.js';
 import type { Request, Response } from 'express';
 import type {
   ChatMessage,
@@ -103,7 +104,7 @@ interface ResolvedPin {
 
 function resolvePin(model: string | undefined, messages: ChatMessage[], sessionId?: string): ResolvedPin {
   const requested = model?.trim();
-  const auto = !requested || requested.toLowerCase() === 'auto' || requested.toLowerCase().startsWith('auto:');
+  const auto = !requested || requested.toLowerCase() === 'auto' || requested.toLowerCase().startsWith('auto:') || isHermesAutoModel(requested);
   if (auto) {
     return {
       preferredModel: resolveStickyPreference(getStickyModel(messages, sessionId)),

@@ -66,7 +66,9 @@ describe('Virtual "auto" model', () => {
     const { status, body } = await request(app, 'GET', '/v1/models', undefined, authHeaders());
     expect(status).toBe(200);
     expect(body.object).toBe('list');
-    expect(body.data[0]).toMatchObject({
+    // HermesFLLM lists its own alias first; plain `auto` follows it.
+    expect(body.data[0]).toMatchObject({ id: 'autoTOP-hermes', owned_by: 'hermesfllm' });
+    expect(body.data[1]).toMatchObject({
       id: 'auto',
       object: 'model',
       owned_by: 'hermesfllm',
@@ -96,7 +98,7 @@ describe('Virtual "auto" model', () => {
   it('returns the whole catalog by default, each tagged with availability (#242)', async () => {
     const { status, body } = await request(app, 'GET', '/v1/models', undefined, authHeaders());
     expect(status).toBe(200);
-    expect(body.data[0]).toMatchObject({ id: 'auto', available: true, unavailable_reason: null });
+    expect(body.data[1]).toMatchObject({ id: 'auto', available: true, unavailable_reason: null });
 
     const models = body.data.filter((m: any) => m.id !== 'auto');
     expect(models.length).toBeGreaterThan(0);
@@ -199,7 +201,7 @@ describe('Virtual "auto" model', () => {
     expect(auto.context_window).toBe(maxConnected);
   });
 
-  it('treats model:"auto" as auto-route instead of a 400', async () => {
+  it.each(['auto', 'autoTOP-hermes'])('treats model:%s as auto-route instead of a 400', async (modelId) => {
     const origFetch = global.fetch;
 
     vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
@@ -225,7 +227,7 @@ describe('Virtual "auto" model', () => {
     });
 
     const { status, body } = await request(app, 'POST', '/v1/chat/completions', {
-      model: 'auto',
+      model: modelId,
       messages: [{ role: 'user', content: 'hello' }],
     }, authHeaders());
 

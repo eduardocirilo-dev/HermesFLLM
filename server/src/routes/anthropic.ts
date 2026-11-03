@@ -1,3 +1,4 @@
+import { isHermesAutoModel } from '../lib/hermes-auto.js';
 import crypto from 'crypto';
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
@@ -55,7 +56,7 @@ const AUTO_MODEL_ID = 'auto';
 function isAutoModel(modelId: string | undefined): boolean {
   if (!modelId) return true;
   const lower = modelId.toLowerCase();
-  return lower === AUTO_MODEL_ID || lower.startsWith(`${AUTO_MODEL_ID}:`);
+  return lower === AUTO_MODEL_ID || lower.startsWith(`${AUTO_MODEL_ID}:`) || isHermesAutoModel(modelId);
 }
 
 const MAX_RETRIES = 20;

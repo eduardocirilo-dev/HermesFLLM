@@ -1,5 +1,6 @@
 import { getDb, getSetting, setSetting } from '../db/index.js';
 import { isCuratedOut } from './curation.js';
+import { isHermesAutoModel } from '../lib/hermes-auto.js';
 import { getProvider, hasProvider, resolveProvider } from '../providers/index.js';
 import { decrypt } from '../lib/crypto.js';
 import { decryptProxyUrl } from '../lib/key-proxy.js';
@@ -1434,7 +1435,7 @@ function activeChainOrThrow(db: Db): ChainRow[] {
 export function resolveRoutingChain(modelString: string | undefined): ResolvedChain {
   const db = getDb();
 
-  if (!modelString || modelString.toLowerCase() === 'auto') {
+  if (!modelString || modelString.toLowerCase() === 'auto' || isHermesAutoModel(modelString)) {
     return { chain: activeChainOrThrow(db), strategyKey: 'auto' };
   }
 
