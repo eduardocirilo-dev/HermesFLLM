@@ -40,6 +40,8 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.os }})
+    # HermesFLLM: publishes under the upstream FreeLLMAPI name; only runs in the upstream repo.
+    if: github.repository_owner == 'tashfeenahmed'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -449,6 +451,8 @@ jobs:
 
   macos-release:
     name: Verify and combine macOS artifacts
+    # HermesFLLM: publishes under the upstream FreeLLMAPI name; only runs in the upstream repo.
+    if: github.repository_owner == 'tashfeenahmed'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -494,7 +498,8 @@ jobs:
   # public. A release created published (the old recipe) is left alone.
   publish:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/')
+    # HermesFLLM: publishes under the upstream FreeLLMAPI name; only runs in the upstream repo.
+    if: github.repository_owner == 'tashfeenahmed' && (startsWith(github.ref, 'refs/tags/'))
     needs: [build, macos-release]
     runs-on: ubuntu-latest
     steps:

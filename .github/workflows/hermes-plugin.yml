@@ -1,0 +1,25 @@
+name: Hermes plugin
+
+# HermesFLLM-only: the Python plugin in hermes-plugin/ is not covered by the Node CI.
+on:
+  push:
+    branches: [main]
+    paths: ['hermes-plugin/**', '.github/workflows/hermes-plugin.yml']
+  pull_request:
+    branches: [main]
+    paths: ['hermes-plugin/**', '.github/workflows/hermes-plugin.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Plugin tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run unit tests (standard library only)
+        working-directory: hermes-plugin/hermesfllm
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests -v
