@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Brain, Clock, Flame, Radar, ShieldCheck, ShieldOff, Trophy, XCircle, Zap } from 'lucide-react'
+import { Activity, Brain, Clock, Flame, Hourglass, LifeBuoy, Radar, Repeat, ShieldCheck, Snowflake, Timer, Trophy, XCircle, Zap } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
 import { BuildBadge } from '@/components/build-badge'
 import { Badge } from '@/components/ui/badge'
@@ -9,6 +9,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
+
+export type RescueKind = 'guard' | 'deadline' | 'stall' | 'runaway' | 'ceiling'
+
+/** Order and icon of each rescue kind on the board. */
+export const RESCUE_KINDS: Array<{ kind: RescueKind; icon: typeof ShieldCheck }> = [
+  { kind: 'guard', icon: ShieldCheck },
+  { kind: 'deadline', icon: Timer },
+  { kind: 'stall', icon: Snowflake },
+  { kind: 'runaway', icon: Repeat },
+  { kind: 'ceiling', icon: Hourglass },
+]
 
 export interface HealthBoard {
   policy: { strategy: string; weights: { reliability: number; speed: number; intelligence: number }; minReliability: number | null }
@@ -27,6 +38,12 @@ export interface HealthBoard {
     excluded: Array<{ platform: string; modelId: string; name: string; reason: string | null; lastProbedAt: string }>
   }
   agentGuard: { enabled: boolean; savedLast24h: number; savedLast7d: number }
+  rescues?: {
+    governorEnabled: boolean
+    last24h: Record<RescueKind, number>
+    total24h: number
+    total7d: number
+  }
   race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
   traffic: { requests24h: number; successRate24h: number | null }
   topModels: Array<{ platform: string; modelId: string; name: string; intelligenceRank: number | null; requests: number; successRate: number; avgLatencyMs: number | null }>
@@ -191,16 +208,39 @@ export default function HealthBoardPage() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  {data.agentGuard.enabled ? <ShieldCheck className="h-4 w-4 text-emerald-500" /> : <ShieldOff className="h-4 w-4 text-muted-foreground" />}
-                  {t('healthBoard.guardTitle')}
-                  <Badge variant={data.agentGuard.enabled ? 'default' : 'secondary'} className="ml-auto">
-                    {data.agentGuard.enabled ? t('healthBoard.on') : t('healthBoard.off')}
-                  </Badge>
+                  <LifeBuoy className="h-4 w-4 text-emerald-500" />
+                  {t('healthBoard.rescuesTitle')}
+                  <span className="ml-auto flex gap-1">
+                    <Badge variant={data.agentGuard.enabled ? 'default' : 'secondary'} className="text-[10px]">
+                      Guard {data.agentGuard.enabled ? t('healthBoard.on') : t('healthBoard.off')}
+                    </Badge>
+                    {data.rescues && (
+                      <Badge variant={data.rescues.governorEnabled ? 'default' : 'secondary'} className="text-[10px]">
+                        Governor {data.rescues.governorEnabled ? t('healthBoard.on') : t('healthBoard.off')}
+                      </Badge>
+                    )}
+                  </span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-4xl font-semibold tabular-nums">{data.agentGuard.savedLast24h}</p>
-                <p className="text-sm text-muted-foreground">{t('healthBoard.guardSaved', { week: data.agentGuard.savedLast7d })}</p>
+                <p className="text-4xl font-semibold tabular-nums">{data.rescues?.total24h ?? data.agentGuard.savedLast24h}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('healthBoard.rescuesSubtitle', { week: data.rescues?.total7d ?? data.agentGuard.savedLast7d })}
+                </p>
+                {data.rescues && (
+                  <ul className="space-y-1 pt-1 text-xs">
+                    {RESCUE_KINDS.map(({ kind, icon: Icon }) => {
+                      const n = data.rescues!.last24h[kind] ?? 0
+                      return (
+                        <li key={kind} className={cn('flex items-center gap-2', n === 0 && 'text-muted-foreground')}>
+                          <Icon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{t(`healthBoard.rescue_${kind}`)}</span>
+                          <span className="ml-auto font-medium tabular-nums">{n}</span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
               </CardContent>
             </Card>
 

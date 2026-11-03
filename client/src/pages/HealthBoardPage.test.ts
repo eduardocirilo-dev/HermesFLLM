@@ -51,3 +51,18 @@ describe('raceShares', () => {
     expect(shares.map(s => [s.key, s.share])).toEqual([['backup', 0.75], ['primary', 0.25]])
   })
 })
+
+import { RESCUE_KINDS } from './HealthBoardPage'
+import en from '../i18n/locales/en.json'
+import ptPT from '../i18n/locales/pt-PT.json'
+import ptBR from '../i18n/locales/pt-BR.json'
+
+describe('rescued turns card', () => {
+  it('has a label for every rescue kind in en, pt-PT and pt-BR', () => {
+    for (const dict of [en, ptPT, ptBR] as Array<{ healthBoard: Record<string, string> }>) {
+      for (const { kind } of RESCUE_KINDS) expect(dict.healthBoard[`rescue_${kind}`]).toBeTruthy()
+      expect(dict.healthBoard.rescuesTitle).toBeTruthy()
+      expect(dict.healthBoard.rescuesSubtitle).toContain('{week}')
+    }
+  })
+})

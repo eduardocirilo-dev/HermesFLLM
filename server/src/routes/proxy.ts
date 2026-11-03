@@ -1,4 +1,5 @@
 import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME, attemptDeadlineMs, agentDeadlineError } from '../lib/hermes-auto.js';
+import { governorConfig, TurnGovernor } from '../lib/hermes-governor.js';
 import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
 import crypto from 'crypto';
 import { Router } from 'express';
@@ -2721,6 +2722,15 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             res.write(': keepalive\n\n');
           });
 
+        // HermesFLLM Turn Governor: after the first token, a stalled, looping or endless silent
+        // turn fails over (or, once something reached the agent, ends cleanly) instead of freezing.
+        const govCfg = governorConfig();
+        const governor = govCfg ? new TurnGovernor(govCfg, {
+          displayName: route.displayName,
+          isCommitted: () => headerSent || headersSentEarly,
+          onTrip: err => deadlineAbort.abort(err),
+        }) : null;
+
         try {
           const gen = route.provider.streamChatCompletion(
             route.apiKey, outboundMessages, route.modelId,
@@ -2819,6 +2829,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             // HermesFLLM first-token race: claim the turn before writing anything; a rival that
             // already claimed it means this attempt lost and must stop without a byte.
             if (firstTokenNow && ctx.firstToken && !ctx.firstToken()) throw raceLostError();
+            if (governor) {
+              const toolDelta = (choice.delta?.tool_calls ?? [])
+                .map((tc: any) => `${tc.function?.name ?? ''}${tc.function?.arguments ?? ''}`).join('');
+              governor.progress(text + reasoning + toolDelta);
+            }
 
             // #764: ttfb = first token of ANY kind, not just visible content —
             // reasoning models stream thinking long before the first answer
@@ -3118,6 +3133,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           if (deadlineAbort.signal.aborted && !(headerSent || headersSentEarly)) {
             throw deadlineAbort.signal.reason instanceof Error ? deadlineAbort.signal.reason : agentDeadlineError(route.displayName, deadlineMs);
           }
+          // Turn Governor tripped after the commit: log the real reason, end the stream cleanly.
+          if (governor?.hasTripped && deadlineAbort.signal.reason instanceof Error) streamErr = deadlineAbort.signal.reason;
           // headerSent = real content went out. headersSentEarly also counts:
           // a #1642 keep-alive ping flushed the SSE headers, so the response
           // is on the wire and this attempt can no longer fail over invisibly.
@@ -3150,6 +3167,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // keep-alive interval must not outlive it.
           streamSettled = true;
           keepaliveStop();
+          governor?.stop();
         }
       } else {
         const result = await route.provider.chatCompletion(

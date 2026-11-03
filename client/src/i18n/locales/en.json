@@ -1360,7 +1360,14 @@
     "raceSummary": "{races} races: backup won {backup}, original held {primary}, both failed {both}",
     "raceAvg": "Rescued turns started answering after {seconds}s on average",
     "raceIdle": "No race yet: every model answered within its own usual time.",
-    "raceDelay": "A backup starts when a model stays silent past its usual p90 first-token time ({min}-{max}s)"
+    "raceDelay": "A backup starts when a model stays silent past its usual p90 first-token time ({min}-{max}s)",
+    "rescuesTitle": "Rescued turns",
+    "rescuesSubtitle": "in 24h ({week} in 7 days): failed over to another model or ended cleanly instead of freezing",
+    "rescue_guard": "Broken tool calls",
+    "rescue_deadline": "Silent models (30s)",
+    "rescue_stall": "Stalled mid-turn",
+    "rescue_runaway": "Repetition loops",
+    "rescue_ceiling": "Endless turns (5 min)"
   },
   "build": {
     "updated": "updated"

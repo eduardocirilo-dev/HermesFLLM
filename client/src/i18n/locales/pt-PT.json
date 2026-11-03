@@ -1360,7 +1360,14 @@
     "raceSummary": "{races} corridas: a reserva ganhou {backup}, o original aguentou {primary}, ambos falharam {both}",
     "raceAvg": "Os turnos salvos começaram a responder ao fim de {seconds}s, em média",
     "raceIdle": "Ainda nenhuma corrida: todos os modelos responderam dentro do seu tempo habitual.",
-    "raceDelay": "Uma reserva arranca quando um modelo fica em silêncio além do seu p90 habitual até ao primeiro token ({min}-{max}s)"
+    "raceDelay": "Uma reserva arranca quando um modelo fica em silêncio além do seu p90 habitual até ao primeiro token ({min}-{max}s)",
+    "rescuesTitle": "Turnos resgatados",
+    "rescuesSubtitle": "em 24h ({week} em 7 dias): passados a outro modelo ou terminados sem congelar",
+    "rescue_guard": "Tool calls estragadas",
+    "rescue_deadline": "Modelos calados (30 s)",
+    "rescue_stall": "Paragens a meio do turno",
+    "rescue_runaway": "Ciclos de repetição",
+    "rescue_ceiling": "Turnos sem fim (5 min)"
   },
   "build": {
     "updated": "atualizado"

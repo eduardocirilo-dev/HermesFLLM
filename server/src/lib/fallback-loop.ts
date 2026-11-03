@@ -1400,6 +1400,9 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
   const maxRetries = hooks.maxRetries ?? FALLBACK_MAX_RETRIES;
   const baseBudgetMs = hooks.timeBudgetMs ?? getFallbackTimeBudgetMs();
   const startedAt = Date.now();
+  // HermesFLLM: the retry budget's clock. Restarted after a Turn Governor or agent-deadline rescue
+  // (see the retryable branch below), so a late rescue still leaves the ladder models to try.
+  let budgetStartedAt = startedAt;
   const attempts: AttemptRecord[] = hooks.attemptLog ?? [];
   const keyOrdinals = new Map<string, number>();
   const keyOrdinal = (route: RouteResult): number => {
@@ -1451,7 +1454,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
     } catch (routeErr) {
       // With no candidate to supply an endpoint-specific allowance, retain
       // the original timeout diagnosis when the base budget is already spent.
-      if (attempt > 1 && baseBudgetMs > 0 && Date.now() - startedAt >= baseBudgetMs) {
+      if (attempt > 1 && baseBudgetMs > 0 && Date.now() - budgetStartedAt >= baseBudgetMs) {
         hooks.onExhausted(
           exhaustedRetryError(lastError, maxRetries, { attempts, timedOut: true, budgetMs: baseBudgetMs }),
           { attempts, timedOut: true },
@@ -1480,7 +1483,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       : baseBudgetMs;
     // Attempt 0 and the first retry remain exempt (#751). Routing reserves a
     // lease, so even a candidate rejected here must pass through finally.
-    if (attempt > 1 && budgetMs > 0 && Date.now() - startedAt >= budgetMs) {
+    if (attempt > 1 && budgetMs > 0 && Date.now() - budgetStartedAt >= budgetMs) {
       hooks.onExhausted(
         exhaustedRetryError(lastError, maxRetries, { attempts, timedOut: true, budgetMs }),
         { attempts, timedOut: true },
@@ -1533,7 +1536,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       }
     };
     if (attempt > 1 && budgetMs > 0 && hooks.abortInFlight) {
-      const remaining = budgetMs - (Date.now() - startedAt);
+      const remaining = budgetMs - (Date.now() - budgetStartedAt);
       if (remaining > 0) {
         hedgeTimer = setTimeout(() => {
           console.log(`[FallbackLoop] retry time budget (${budgetMs}ms) expired with no first byte on ${route.platform}/${route.modelId} — aborting stalled upstream`);
@@ -1685,6 +1688,9 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
         // about whether candidate four is up. Once the empty-completion streak
         // lifts the exemption (#751), the failure counts everywhere.
         if (!exempt && stopIfBreakerTripped()) return;
+        // HermesFLLM rescue (Turn Governor / agent deadline): the agent is still waiting and the
+        // time went to a model that failed it, so the next hops get a fresh budget.
+        if (err?.governor === true || err?.agentDeadline === true) budgetStartedAt = Date.now();
         continue;
       }
       traceAttempt(classifyAttemptError(err), err);

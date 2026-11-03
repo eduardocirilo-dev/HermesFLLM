@@ -17,12 +17,13 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
 | **Broken tool calls** | Arguments that are not valid JSON are dropped silently when streaming and passed through otherwise; calls to undeclared tools go undetected | **Agent Guard** (on by default): an unnamed call, an undeclared tool, non-object/invalid JSON arguments or a schema violation fails the turn over to another model *before* anything reaches the agent, and penalises the model |
 | **Silent / stalled models** | The time-budget hedge skips the first attempt and stops once a keep-alive is sent | **Agent deadline**: any attempt (the first included) that produces no token within 30s (text, reasoning or a tool-call fragment) is cancelled and the turn fails over invisibly; only that model is ruled out, not its whole provider. A model that has started writing, even a long tool call, is never cut by it |
 | **Waiting on a slow start** | Strictly sequential: the next model starts only after the current one fails or times out, from scratch | **First-token race** (on by default): if a model is still silent after its own usual p90 time to first token (3-15s), the next-best model starts in parallel and the first to produce a token wins; the other is cancelled before writing a byte and is not penalised. Fast turns never pay for a second prompt. Auto-routed `chat/completions`, streaming and not |
+| **Frozen turns** | After the first token only an upstream watchdog applies: 90s without a single byte. A stream that keeps trickling or looping runs until the provider gives up (observed: 26 minutes), and by then the failover budget is spent, so the agent gets a 502 | **Turn Governor**: watches real progress (text, reasoning, tool-call arguments), not bytes. A stall (under 32 new characters in 30s before the agent receives anything, 90s after), a repetition loop (the last 8KB compressing over 20x; real output measures 2-7x) or a 5-minute silent turn fails over invisibly, or ends with a clean error the agent retries. A rescue restarts the failover budget so the ladder still has models to try |
 | **Slow models** | Ranked mostly on success; a 3-minute answer counts as a success | **Latency ceiling**: models averaging over 60s per successful answer go to the back of the chain, even mid-conversation (sticky) |
 | **Model selection** | Balanced default (reliability 50% / speed 25% / intelligence 25%) | Agent policy: reliability 55% / intelligence 30% / speed 15%, plus a 90% minimum success rate |
 | **Knowing which models work** | Proactive probe is off by default and observation-only (routing never reads it); probes ask "Reply with OK" | **Continuous agent-grade curation**: every 10 min, up to 4 probes that ask the model to make a real tool call, validated by the Agent Guard. A model that fails is excluded until it passes again (verdicts last 1h). Busy providers (429/5xx) count as inconclusive, not as broken |
 | **Reacting to failures** | Penalties and cooldowns after real failures | Same, plus a real-traffic failure triggers a probe of that model within ~30s |
 | **Failover target** | Next model in the chain | A **warm reserve**: the most reliable recent models are probed most often, so failover lands on a model already proven to answer |
-| **Visibility** | Analytics and logs | **Model health board** (top bar): live 24h success gauge, Agent Guard saves, first-token race wins, live curation, warm reserve, routing policy, excluded models with the reason |
+| **Visibility** | Analytics and logs | **Model health board** (top bar): live 24h success gauge, rescued turns by kind (Agent Guard, deadline, stall, loop, ceiling), first-token race wins, live curation, warm reserve, routing policy, excluded models with the reason |
 | **Model id** | `auto` | `autoTOP-hermes` (routes like `auto` under the agent policy; `auto` still works) |
 | **Running beside the agent** | Docker / desktop app | macOS **launchd** service (`scripts/launchd/install.sh`), build stamp (version, commit, build time) on every page and at `GET /api/hermesfllm/version` |
 
@@ -34,8 +35,12 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
   gets the monthly catalog snapshot. An open HermesFLLM catalog is planned.
 - **Probes spend free quota.** Up to 4 probes every 10 minutes, capped at 60 per provider per day
   (`HERMESFLLM_CURATION_*`).
-- **A model that starts answering and then stalls** cannot be switched invisibly once output has
-  reached the agent; the latency ceiling demotes such models after a few slow answers.
+- **Once output has reached the agent**, a stalled or looping stream can only be ended cleanly (the
+  agent sees an error and retries), not switched invisibly. The latency ceiling demotes such models
+  after a few slow answers.
+- **The loop detector is a heuristic.** It needs 8KB of output compressing over 20x; an agent that
+  deliberately writes a huge, highly repetitive file (for example thousands of identical lines)
+  would be cut. `HERMESFLLM_RUNAWAY_RATIO` raises the bar, `HERMESFLLM_GOVERNOR=0` turns it off.
 - **A race spends a second prompt.** Only on turns where the first model stayed silent past its usual
   start time, but on those the prompt is sent twice, which counts against the backup provider's
   token quota. The backup is a different model, so a race can switch models mid-session.
@@ -78,6 +83,11 @@ fallback with a model the fallback provider actually has, so a HermesFLLM outage
 | `HERMESFLLM_RACE_DELAY_MS` | 8000 | race delay for a model with under 8 recent successes |
 | `HERMESFLLM_RACE_MIN_DELAY_MS` / `_MAX_DELAY_MS` | 3000 / 15000 | bounds of the per-model race delay (1.25 x p90 time to first token, last 24h) |
 | `HERMESFLLM_MAX_LATENCY_MS` | 60000 | latency ceiling |
+| `HERMESFLLM_GOVERNOR` | on | `0` disables the Turn Governor |
+| `HERMESFLLM_STALL_MS` | 30000 | no progress after the first token, before the agent receives anything |
+| `HERMESFLLM_COMMITTED_STALL_MS` | 90000 | no progress once the agent is receiving the stream |
+| `HERMESFLLM_TURN_CEILING_MS` | 300000 | longest turn that has sent nothing to the agent |
+| `HERMESFLLM_RUNAWAY_RATIO` | 20 | compression ratio of the last 8KB that counts as a loop |
 | `HERMESFLLM_CURATION_INTERVAL_MS` | 600000 | curation round interval |
 | `HERMESFLLM_CURATION_MAX_PROBES` | 4 | probes per round |
 | `HERMESFLLM_CURATION_DAILY_CAP` | 60 | probes per provider per day |
@@ -101,7 +111,8 @@ tools (`hermes-plugin/hermesfllm/`).
 - Outbound `User-Agent` / `X-Title` headers to providers still say FreeLLMAPI on purpose: some free
   tiers may recognise the router by them.
 - HermesFLLM code lives mostly in `server/src/services/curation.ts`, `server/src/lib/hermes-auto.ts`,
-  `server/src/lib/tool-validate.ts` (Agent Guard), `server/src/routes/curation.ts` and
+  `server/src/lib/tool-validate.ts` (Agent Guard), `server/src/lib/hermes-governor.ts` (Turn Governor),
+  `server/src/routes/curation.ts` and
   `client/src/pages/HealthBoardPage.tsx`.
 
 Everything below is the original FreeLLMAPI README.

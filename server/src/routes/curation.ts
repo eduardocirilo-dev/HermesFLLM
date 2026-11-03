@@ -5,6 +5,7 @@ import { getCustomWeights, getMinReliabilityFloor, getRoutingStrategy } from '..
 import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, curationStatus, reserveModelIds } from '../services/curation.js';
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
+import { governorConfig } from '../lib/hermes-governor.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
 // excluded and why, and how many broken agent turns the Agent Guard caught.
@@ -74,6 +75,38 @@ export function buildHealthBoard(now = Date.now()) {
      WHERE error LIKE '%agent guard:%' AND created_at >= datetime('now', '-7 day')
   `).get() as { day: number | null; week: number | null };
 
+  // Every attempt a HermesFLLM protection took away from the agent: failed over before anything
+  // reached it, or (Turn Governor after the commit) ended cleanly instead of freezing.
+  const rescueRows = db.prepare(`
+    SELECT SUM(error LIKE '%agent guard:%') AS guard,
+           SUM(error LIKE '%agent deadline:%') AS deadline,
+           SUM(error LIKE '%agent governor:%stopped making progress%') AS stall,
+           SUM(error LIKE '%agent governor:%is looping%') AS runaway,
+           SUM(error LIKE '%agent governor:%exceeded the turn ceiling%') AS ceiling,
+           SUM(created_at < datetime('now', '-1 day')) AS older
+      FROM requests
+     WHERE status = 'error' AND created_at >= datetime('now', '-7 day')
+       AND (error LIKE '%agent guard:%' OR error LIKE '%agent deadline:%' OR error LIKE '%agent governor:%')
+  `).get() as Record<'guard' | 'deadline' | 'stall' | 'runaway' | 'ceiling' | 'older', number | null>;
+  const rescues24h = db.prepare(`
+    SELECT SUM(error LIKE '%agent guard:%') AS guard,
+           SUM(error LIKE '%agent deadline:%') AS deadline,
+           SUM(error LIKE '%agent governor:%stopped making progress%') AS stall,
+           SUM(error LIKE '%agent governor:%is looping%') AS runaway,
+           SUM(error LIKE '%agent governor:%exceeded the turn ceiling%') AS ceiling
+      FROM requests
+     WHERE status = 'error' AND created_at >= datetime('now', '-1 day')
+  `).get() as Record<'guard' | 'deadline' | 'stall' | 'runaway' | 'ceiling', number | null>;
+  const last24h = {
+    guard: rescues24h.guard ?? 0,
+    deadline: rescues24h.deadline ?? 0,
+    stall: rescues24h.stall ?? 0,
+    runaway: rescues24h.runaway ?? 0,
+    ceiling: rescues24h.ceiling ?? 0,
+  };
+  const total24h = Object.values(last24h).reduce((a, b) => a + b, 0);
+  const total7d = total24h + (rescueRows.older ?? 0);
+
   const traffic = db.prepare(`
     SELECT COUNT(*) AS total, SUM(status = 'success') AS ok
       FROM requests WHERE created_at >= datetime('now', '-1 day') AND status IN ('success', 'error')
@@ -100,6 +133,12 @@ export function buildHealthBoard(now = Date.now()) {
       enabled: isAgentGuardEnabled(),
       savedLast24h: guard.day ?? 0,
       savedLast7d: guard.week ?? 0,
+    },
+    rescues: {
+      governorEnabled: governorConfig() !== null,
+      last24h,
+      total24h,
+      total7d,
     },
     race: (() => {
       const { min, max } = raceDelayBounds();

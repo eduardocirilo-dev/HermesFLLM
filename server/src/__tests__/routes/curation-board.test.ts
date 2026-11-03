@@ -48,6 +48,21 @@ describe('buildHealthBoard', () => {
     expect(board.agentGuard).toMatchObject({ enabled: true, savedLast24h: 2, savedLast7d: 2 });
   });
 
+  it('counts every turn a HermesFLLM protection rescued, by kind', () => {
+    request('a', 'error', 'invalid tool arguments from X (agent guard: rm: not a declared tool)');
+    request('a', 'error', 'agent deadline: X sent no output within 30.0s (timeout), failing over');
+    request('a', 'error', 'agent governor: X stopped making progress — under 32 new characters in 30s (timeout), failing over');
+    request('a', 'error', 'agent governor: X stopped making progress — under 32 new characters in 31s (timeout), failing over');
+    request('a', 'error', 'agent governor: X is looping (repeating output) — last 8KB compress 94x (timeout), failing over');
+    request('a', 'error', 'agent governor: X exceeded the turn ceiling — 300s with nothing sent to the agent (timeout), failing over');
+    request('a', 'error', 'Groq API error 413');
+    const { rescues } = buildHealthBoard();
+    expect(rescues.last24h).toEqual({ guard: 1, deadline: 1, stall: 2, runaway: 1, ceiling: 1 });
+    expect(rescues.total24h).toBe(6);
+    expect(rescues.total7d).toBe(6);
+    expect(rescues.governorEnabled).toBe(true);
+  });
+
   it('ranks models by success rate and ignores ones with too little traffic', () => {
     for (let i = 0; i < 6; i++) request('solid', 'success');
     for (let i = 0; i < 6; i++) request('flaky', i < 3 ? 'success' : 'error');
