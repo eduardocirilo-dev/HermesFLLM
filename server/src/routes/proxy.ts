@@ -19,7 +19,7 @@ import { routeOutputBudget } from '../lib/output-cap.js';
 import { resolveTaskType } from '../lib/task-type.js';
 import { normalizeMessageImages } from '../lib/image-normalize.js';
 import { repairToolArguments, toolSchemaMap } from '../lib/tool-args.js';
-import { invalidToolArgumentsError, invalidToolCallReasons, isToolArgumentValidationEnabled } from '../lib/tool-validate.js';
+import { invalidToolArgumentsError, invalidToolCallReasons, isToolArgumentValidationEnabled, agentGuardReasons, agentGuardError, isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { sanitizeProviderErrorMessage } from '../lib/error-redaction.js';
 import { rescueInlineToolCalls, startsWithDialectMarker, couldBecomeDialectMarker, containsDialectMarker } from '../lib/tool-call-rescue.js';
 import { getContextHandoffMode, recordIncomingMessages, maybeInjectContextHandoff, recordSuccessfulModel, hasPriorModel, HANDOFF_MAX_TOKENS } from '../services/context-handoff.js';
@@ -2846,6 +2846,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // double-encoded arguments against the request's schemas, drop
           // calls whose args still aren't valid JSON.
           const schemas = toolSchemaMap(tools);
+          const agentGuard = isAgentGuardEnabled();
           let syntheticStreamIds = 0;
           const completedCalls = [...toolCallAcc.entries()]
             .sort((a, b) => a[0] - b[0])
@@ -2854,7 +2855,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
               type: 'function' as const,
               function: { name: acc.name, arguments: repairToolArguments(acc.args || '{}', schemas.get(acc.name)) },
             }))
-            .filter(c => { try { JSON.parse(c.function.arguments); return c.function.name.length > 0; } catch { return false; } });
+            // With the agent guard on, keep broken calls so the guard below fails the
+            // turn over instead of silently dropping the action the agent asked for.
+            .filter(c => { if (agentGuard) return true; try { JSON.parse(c.function.arguments); return c.function.name.length > 0; } catch { return false; } });
 
           // Dialect rescue: the held text is an inline tool call in some
           // model's private syntax. Parse it into structured calls or treat
@@ -2886,9 +2889,19 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // for the client than forwarding a tool call the schema dislikes.
           // Off-by-default or not, this check must never turn a served answer
           // into a broken one.
-          if (isToolArgumentValidationEnabled() && mode !== 'passthrough' && completedCalls.length > 0) {
+          if (agentGuard && mode !== 'passthrough' && completedCalls.length > 0) {
+            const bad = agentGuardReasons(completedCalls, tools);
+            if (bad.length > 0) throw agentGuardError(route.displayName, bad);
+          } else if (isToolArgumentValidationEnabled() && mode !== 'passthrough' && completedCalls.length > 0) {
             const invalid = invalidToolCallReasons(completedCalls, schemas);
             if (invalid.length > 0) throw invalidToolArgumentsError(route.displayName, invalid);
+          }
+          // Prose already flushed (passthrough): too late to fail over, so drop what
+          // the agent could not parse rather than forward it.
+          if (agentGuard && mode === 'passthrough') {
+            for (let i = completedCalls.length - 1; i >= 0; i--) {
+              if (agentGuardReasons([completedCalls[i]], tools).length > 0) completedCalls.splice(i, 1);
+            }
           }
 
           // Disconnect before the commit point: nothing usable was (or will
@@ -3207,7 +3220,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           }
           // Whatever the repair could not fix is still broken. Opt-in, and
           // thrown before anything is written, so failover is invisible.
-          if (isToolArgumentValidationEnabled()) {
+          if (isAgentGuardEnabled()) {
+            const bad = agentGuardReasons(respMsg.tool_calls, tools);
+            if (bad.length > 0) throw agentGuardError(route.displayName, bad);
+          } else if (isToolArgumentValidationEnabled()) {
             const invalid = invalidToolCallReasons(respMsg.tool_calls, schemas);
             if (invalid.length > 0) throw invalidToolArgumentsError(route.displayName, invalid);
           }

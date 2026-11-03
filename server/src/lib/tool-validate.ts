@@ -177,3 +177,76 @@ export function invalidToolCallReasons(
   }
   return reasons;
 }
+
+// ── HermesFLLM Agent Guard ──────────────────────────────────────────────────
+// An agent cannot use a tool call that names a tool it never declared, carries
+// arguments that are not a JSON object, or breaks the declared schema: the turn
+// is lost, or worse, the agent runs a tool with nothing. Free models produce all
+// three. ON by default in HermesFLLM (`agent_guard` setting / AGENT_GUARD env,
+// '0' or 'false' to disable): such a turn fails over to the next model before
+// any byte reaches the client, and the model is penalised so the router learns
+// to stop picking it for tool work.
+
+export const AGENT_GUARD_SETTING = 'agent_guard';
+
+export function isAgentGuardEnabled(): boolean {
+  let stored: string | undefined;
+  try {
+    stored = getSetting(AGENT_GUARD_SETTING);
+  } catch {
+    stored = undefined; // DB not ready — never throw on the proxy hot path.
+  }
+  for (const raw of [stored, process.env.AGENT_GUARD]) {
+    if (raw === undefined || raw.trim() === '') continue;
+    const value = raw.trim().toLowerCase();
+    return !(value === '0' || value === 'false' || value === 'off');
+  }
+  return true;
+}
+
+/** Reasons a turn's tool calls are unusable by the agent; empty means servable. */
+export function agentGuardReasons(
+  calls: Array<{ function?: { name?: string; arguments?: string } }> | undefined,
+  tools: Array<{ type?: string; function?: { name?: string; parameters?: unknown } }> | undefined,
+): string[] {
+  if (!calls || calls.length === 0) return [];
+  const declared = new Map<string, unknown>();
+  for (const t of tools ?? []) {
+    if (t?.function?.name) declared.set(t.function.name, t.function.parameters);
+  }
+  const reasons: string[] = [];
+  for (const call of calls) {
+    const name = call.function?.name ?? '';
+    const args = call.function?.arguments ?? '';
+    if (!name) { reasons.push('tool call without a name'); continue; }
+    // No tools declared at all (e.g. replaying history) gives nothing to judge names against.
+    if (declared.size > 0 && !declared.has(name)) { reasons.push(`${name}: not a declared tool`); continue; }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(args.trim() === '' ? '{}' : args);
+    } catch {
+      reasons.push(`${name}: arguments are not valid JSON`);
+      continue;
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      reasons.push(`${name}: arguments are not a JSON object`);
+      continue;
+    }
+    const verdict = validateToolArguments(name, JSON.stringify(parsed), declared.get(name));
+    if (!verdict.ok) reasons.push(verdict.reason);
+  }
+  return reasons;
+}
+
+/**
+ * Same `invalid tool arguments` marker, so the loop fails over, and the whole model
+ * is ruled out for the request — but WITHOUT skipBench: the model is penalised, so
+ * it sinks in routing for tool-bearing traffic instead of being re-picked.
+ */
+export function agentGuardError(displayName: string, reasons: string[]): Error {
+  const detail = reasons.slice(0, 3).join('; ');
+  return Object.assign(
+    new Error(`invalid tool arguments from ${displayName} (agent guard: ${detail})`),
+    { skipModelForRequest: true, agentGuard: true },
+  );
+}

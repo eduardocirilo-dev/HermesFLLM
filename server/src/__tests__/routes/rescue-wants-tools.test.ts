@@ -111,11 +111,14 @@ describe('streaming tool-call rescue respects whether the request wanted tools',
     chatCompletion.mockReset();
     streamChatCompletion.mockReset();
     getDb().prepare('DELETE FROM rate_limit_cooldowns').run();
+    // These cases pin the legacy opt-in validator; the HermesFLLM agent guard is covered in agent-guard.test.ts.
+    process.env.AGENT_GUARD = '0';
     delete process.env.VALIDATE_TOOL_ARGUMENTS;
   });
 
   afterEach(() => {
     delete process.env.VALIDATE_TOOL_ARGUMENTS;
+    delete process.env.AGENT_GUARD;
   });
 
   const bearer = () => ({ Authorization: `Bearer ${key}` });
