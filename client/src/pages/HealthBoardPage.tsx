@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Brain, Clock, ShieldCheck, ShieldOff, Trophy, XCircle } from 'lucide-react'
+import { Activity, Brain, Clock, Flame, Radar, ShieldCheck, ShieldOff, Trophy, XCircle } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
+import { BuildBadge } from '@/components/build-badge'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,11 +13,15 @@ import { useI18n } from '@/i18n'
 export interface HealthBoard {
   policy: { strategy: string; weights: { reliability: number; speed: number; intelligence: number }; minReliability: number | null }
   curation: {
-    intervalHours: number
-    maxProbesPerPass: number
-    lastPassAt: string | null
-    lastProbed: number | null
-    nextPassAt: string | null
+    intervalMinutes: number
+    maxProbesPerRound: number
+    verdictTtlMinutes: number
+    dailyCapPerPlatform: number
+    lastRound: { at: string; results: Array<{ platform: string; modelId: string; reason: string; status: string; latencyMs?: number }> } | null
+    nextRoundAt: string | null
+    urgentQueued: number
+    probesToday: number
+    reserve: Array<{ platform: string; modelId: string; name: string; lastStatus: string | null; lastProbedAt: string | null }>
     probedModels: number
     working: number
     excluded: Array<{ platform: string; modelId: string; name: string; reason: string | null; lastProbedAt: string }>
@@ -47,6 +52,12 @@ export function formatCountdown(targetIso: string | null, now: number): string |
   const h = Math.floor(ms / 3_600_000)
   const m = Math.floor((ms % 3_600_000) / 60_000)
   return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+export function formatAgo(iso: string, now: number): string {
+  const ms = Math.max(0, now - Date.parse(iso))
+  const m = Math.floor(ms / 60_000)
+  return m < 1 ? '<1m' : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
 /** Big circular gauge for the 24h success rate. */
@@ -107,6 +118,7 @@ export default function HealthBoardPage() {
   return (
     <div className="space-y-6">
       <PageHeader title={t('healthBoard.title')} description={t('healthBoard.description')} />
+      <BuildBadge className="-mt-4" />
 
       {isError && <p className="text-sm text-red-500">{t('healthBoard.loadError')}</p>}
       {isLoading || !data ? (
@@ -144,11 +156,18 @@ export default function HealthBoardPage() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-base"><Clock className="h-4 w-4" />{t('healthBoard.curationTitle')}</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Radar className="h-4 w-4 text-emerald-500 animate-[spin_6s_linear_infinite]" />{t('healthBoard.curationTitle')}
+                  {data.curation.urgentQueued > 0 && (
+                    <Badge variant="destructive" className="ml-auto">{t('healthBoard.urgent', { count: data.curation.urgentQueued })}</Badge>
+                  )}
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <p className="text-4xl font-semibold tabular-nums">{formatCountdown(data.curation.nextPassAt, now) ?? '—'}</p>
-                <p className="text-muted-foreground">{t('healthBoard.nextPass', { hours: data.curation.intervalHours, max: data.curation.maxProbesPerPass })}</p>
+                <p className="text-4xl font-semibold tabular-nums">{data.curation.probesToday}</p>
+                <p className="text-muted-foreground">
+                  {t('healthBoard.probesToday', { next: formatCountdown(data.curation.nextRoundAt, now) ?? '—', max: data.curation.maxProbesPerRound, every: data.curation.intervalMinutes })}
+                </p>
                 <p className="text-muted-foreground">
                   {t('healthBoard.probed', { working: data.curation.working, total: data.curation.probedModels })}
                 </p>
@@ -211,6 +230,48 @@ export default function HealthBoardPage() {
                       floor: data.policy.minReliability === null ? '—' : pct(data.policy.minReliability),
                     })}
                   </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-base"><Flame className="h-4 w-4 text-orange-500" />{t('healthBoard.reserveTitle')}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {data.curation.reserve.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">{t('healthBoard.noReserve')}</p>
+                  ) : (
+                    <ul className="space-y-1.5">
+                      {data.curation.reserve.map(m => (
+                        <li key={`${m.platform}/${m.modelId}`} className="flex items-center gap-2 text-sm">
+                          <span
+                            className={cn('h-2 w-2 shrink-0 rounded-full', {
+                              'bg-emerald-500': m.lastStatus === 'working',
+                              'bg-red-500': m.lastStatus === 'unavailable',
+                              'bg-muted-foreground/40': m.lastStatus === null,
+                            })}
+                            aria-label={m.lastStatus ?? t('healthBoard.notProbed')}
+                          />
+                          <span className="truncate" title={`${m.platform}/${m.modelId}`}>{m.name}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {data.curation.lastRound && data.curation.lastRound.results.length > 0 && (
+                    <div className="mt-3 border-t pt-2 text-xs text-muted-foreground">
+                      <p className="mb-1">{t('healthBoard.lastRound', { ago: formatAgo(data.curation.lastRound.at, now) })}</p>
+                      <ul className="space-y-0.5">
+                        {data.curation.lastRound.results.map(r => (
+                          <li key={`${r.platform}/${r.modelId}`} className="flex justify-between gap-2">
+                            <span className="truncate">{r.modelId}</span>
+                            <span className={cn('shrink-0', r.status === 'working' ? 'text-emerald-500' : r.status === 'unavailable' ? 'text-red-500' : '')}>
+                              {r.status === 'working' && r.latencyMs !== undefined ? `${(r.latencyMs / 1000).toFixed(1)}s` : r.status}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 

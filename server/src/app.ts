@@ -37,6 +37,7 @@ import { updateRouter } from './routes/update.js';
 import { moderationRouter } from './routes/moderation.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { curationRouter } from './routes/curation.js';
+import { HERMESFLLM_BUILD } from './lib/hermes-build.js';
 import { createHostGuard } from './middleware/allowed-hosts.js';
 import { createProxyRateLimiter, createAdminRateLimiter } from './middleware/rateLimit.js';
 
@@ -286,6 +287,10 @@ export function createApp(config?: Config) {
   app.use('/api/update', requireAuth, updateRouter);
 
   // Health check — no auth required.
+  // HermesFLLM release info; public like /api/ping (no secrets, localhost-bound server).
+  app.get('/api/hermesfllm/version', (_req, res) => {
+    res.json(HERMESFLLM_BUILD);
+  });
   app.get('/api/ping', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });

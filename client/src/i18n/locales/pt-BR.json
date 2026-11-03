@@ -1336,8 +1336,7 @@
     "on": "Ligado",
     "off": "Desligado",
     "guardSaved": "tool calls estragadas apanhadas em 24h ({week} em 7 dias), cada uma repetida noutro modelo",
-    "curationTitle": "Próxima curadoria",
-    "nextPass": "a cada {hours}h, até {max} testes reais por passagem",
+    "curationTitle": "Curadoria ao vivo",
     "probed": "{working} de {total} modelos testados a responder",
     "topTitle": "Modelos mais fiáveis (24h)",
     "noTraffic": "Ainda não há tráfego suficiente. Um modelo precisa de 5 pedidos para entrar no ranking.",
@@ -1347,6 +1346,15 @@
     "speed": "Velocidade",
     "policyFoot": "Estratégia {strategy} · modelos abaixo de {floor} de sucesso são ignorados",
     "excludedTitle": "Excluídos pela curadoria",
-    "noneExcluded": "Nenhum modelo está excluído agora."
+    "noneExcluded": "Nenhum modelo está excluído agora.",
+    "probesToday": "testes hoje · próxima rodada em {next} ({max} a cada {every} min)",
+    "urgent": "{count} urgente(s)",
+    "reserveTitle": "Reserva aquecida",
+    "noReserve": "Ainda sem reserva: os modelos precisam de 5 pedidos em 24h.",
+    "notProbed": "ainda não testado",
+    "lastRound": "Última rodada há {ago}"
+  },
+  "build": {
+    "updated": "atualizado"
   }
 }

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getDb } from '../db/index.js';
 import { getCustomWeights, getMinReliabilityFloor, getRoutingStrategy } from '../services/router.js';
-import { CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, curationSchedule } from '../services/curation.js';
+import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, curationStatus, reserveModelIds } from '../services/curation.js';
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
@@ -11,6 +11,21 @@ export const curationRouter = Router();
 
 // Models need some traffic before their success rate means anything.
 const MIN_REQUESTS = 5;
+
+/** The warm reserve with each model's freshest probe verdict. */
+function reserve() {
+  const ids = reserveModelIds();
+  if (ids.length === 0) return [];
+  const db = getDb();
+  return ids.map(id => {
+    const m = db.prepare('SELECT platform, model_id, display_name, endpoint_scope FROM models WHERE id = ?').get(id) as { platform: string; model_id: string; display_name: string | null; endpoint_scope: string | null } | undefined;
+    if (!m) return null;
+    const p = db.prepare(`SELECT status, last_probed_at FROM model_probe_status
+                           WHERE platform = ? AND model_id = ? AND endpoint_scope = ?
+                           ORDER BY last_probed_at DESC LIMIT 1`).get(m.platform, m.model_id, m.endpoint_scope ?? '') as { status: string; last_probed_at: string } | undefined;
+    return { platform: m.platform, modelId: m.model_id, name: m.display_name ?? m.model_id, lastStatus: p?.status ?? null, lastProbedAt: p?.last_probed_at ?? null };
+  }).filter((x): x is NonNullable<typeof x> => x !== null);
+}
 
 export function buildHealthBoard(now = Date.now()) {
   const db = getDb();
@@ -69,9 +84,12 @@ export function buildHealthBoard(now = Date.now()) {
       minReliability: getMinReliabilityFloor() ?? null,
     },
     curation: {
-      intervalHours: CURATION_INTERVAL_MS / 3_600_000,
-      maxProbesPerPass: CURATION_MAX_PROBES,
-      ...curationSchedule(now),
+      intervalMinutes: CURATION_INTERVAL_MS / 60_000,
+      maxProbesPerRound: CURATION_MAX_PROBES,
+      verdictTtlMinutes: CURATION_VERDICT_TTL_MS / 60_000,
+      dailyCapPerPlatform: CURATION_DAILY_CAP_PER_PLATFORM,
+      ...curationStatus(now),
+      reserve: reserve(),
       probedModels: byModel.size,
       working: [...byModel.values()].filter(m => m.working > 0).length,
       excluded: excluded.map(m => ({ platform: m.platform, modelId: m.modelId, name: m.name, reason: m.lastError, lastProbedAt: m.lastProbedAt })),

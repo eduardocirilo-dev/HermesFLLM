@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCountdown, healthTone } from './HealthBoardPage'
+import { formatAgo, formatCountdown, healthTone } from './HealthBoardPage'
 
 describe('healthTone', () => {
   it('uses the 95% / 80% thresholds', () => {
@@ -20,5 +20,26 @@ describe('formatCountdown', () => {
   it('never goes negative and handles a missing date', () => {
     expect(formatCountdown('2026-11-03T11:00:00Z', now)).toBe('0m')
     expect(formatCountdown(null, now)).toBeNull()
+  })
+})
+
+describe('formatAgo', () => {
+  const now = Date.parse('2026-11-03T12:00:00Z')
+  it('reads as minutes, then hours', () => {
+    expect(formatAgo('2026-11-03T11:59:40Z', now)).toBe('<1m')
+    expect(formatAgo('2026-11-03T11:52:00Z', now)).toBe('8m')
+    expect(formatAgo('2026-11-03T10:30:00Z', now)).toBe('1h 30m')
+  })
+})
+
+import { buildLabel } from '@/components/build-badge'
+
+describe('buildLabel', () => {
+  it('shows version, commit and the update time', () => {
+    const label = buildLabel({ version: '0.5.0', commit: 'abc1234', builtAt: '2026-11-03T11:40:00Z' }, 'updated', 'en-GB')
+    expect(label).toMatch(/^HermesFLLM v0\.5\.0 · abc1234 · updated \d{2}\/\d{2}\/\d{4}, \d{2}:\d{2}$/)
+  })
+  it('degrades without a commit or build time', () => {
+    expect(buildLabel({ version: 'dev', commit: null, builtAt: '' }, 'updated')).toBe('HermesFLLM vdev')
   })
 })

@@ -1336,8 +1336,7 @@
     "on": "On",
     "off": "Off",
     "guardSaved": "broken tool calls caught in 24h ({week} in 7 days), each retried on another model",
-    "curationTitle": "Next curation",
-    "nextPass": "every {hours}h, up to {max} live probes per pass",
+    "curationTitle": "Live curation",
     "probed": "{working} of {total} probed models answering",
     "topTitle": "Most reliable models (24h)",
     "noTraffic": "Not enough traffic yet. Models need 5 requests to be ranked.",
@@ -1347,6 +1346,15 @@
     "speed": "Speed",
     "policyFoot": "Strategy {strategy} · models below {floor} success are skipped",
     "excludedTitle": "Excluded by curation",
-    "noneExcluded": "No model is excluded right now."
+    "noneExcluded": "No model is excluded right now.",
+    "probesToday": "probes today · next round in {next} ({max} every {every} min)",
+    "urgent": "{count} urgent",
+    "reserveTitle": "Warm reserve",
+    "noReserve": "No reserve yet: models need 5 requests in 24h.",
+    "notProbed": "not probed yet",
+    "lastRound": "Last round {ago} ago"
+  },
+  "build": {
+    "updated": "updated"
   }
 }

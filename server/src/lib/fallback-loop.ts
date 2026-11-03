@@ -1,3 +1,4 @@
+import { noteLiveFailure } from '../services/curation.js';
 import { nextMonthResetAt } from '../services/key-budget.js';
 import { benchCloudflareAccount } from '../services/cloudflare-daily-quota.js';
 // One shared provider retry/fallback loop for every OpenAI-, Responses- and
@@ -617,6 +618,8 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
     // on one key) must sink out of routing instead of being re-picked every
     // request.
     noteModelFailure(route, now);
+    // HermesFLLM: probe this model within seconds; a 429 is quota, not a broken model.
+    if (!isRateLimitSignal(err)) noteLiveFailure(route.modelDbId);
   }
   // Model-level penalty only when no sibling key can still serve (#454).
   if (!providerMoment && !hasOtherUsableKey(route.modelDbId, route.keyId, state.skipKeys)) {

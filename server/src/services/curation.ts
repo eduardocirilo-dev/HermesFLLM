@@ -1,20 +1,29 @@
-// HermesFLLM curation: keep routing on the most reliable, most capable free models.
+// HermesFLLM curation: keep routing on the most reliable, most capable free models, continuously.
 //
 // 1. Default policy (applied once, only where the operator has not chosen): 'custom' strategy
 //    weighted towards reliability and intelligence, plus a minimum reliability floor.
-// 2. Every HERMESFLLM_CURATION_INTERVAL_MS (3h) a curation pass sends real probe requests to the
-//    stalest model+key pairs (model-probe), so dead models are found before a user turn hits them.
-// 3. routeRequest skips a model whose recent probes all came back 'unavailable' and none
-//    'working' (isCuratedOut). The verdict expires with the probe window, so a recovered model
-//    returns on the next pass.
+// 2. Small probe rounds every HERMESFLLM_CURATION_INTERVAL_MS (10 min, up to 4 probes each),
+//    in priority order: models that just failed real traffic, models currently excluded (to see
+//    if they recovered), the warm reserve (the most reliable models the router fails over to),
+//    then whatever has gone longest without a probe. A daily cap per platform protects free quota.
+// 3. A failure in live traffic queues that model for a probe within seconds, not hours.
+// 4. routeRequest skips a model whose fresh probes all failed (isCuratedOut). Verdicts expire
+//    after HERMESFLLM_CURATION_VERDICT_TTL_MS (1h), so a recovered model comes back quickly.
 import { getDb, getSetting, setSetting } from '../db/index.js';
 import type { Scheduler } from '../lib/scheduler.js';
-import { runModelProbePass } from './model-probe.js';
+import { probeModel, recordProbeResult, selectProbeCandidates, type ProbeCandidate, type ModelProbeRequestDeps, type ProbeOutcome } from './model-probe.js';
 
-export const CURATION_INTERVAL_MS = positiveInt(process.env.HERMESFLLM_CURATION_INTERVAL_MS, 3 * 60 * 60 * 1000);
-export const CURATION_MAX_PROBES = positiveInt(process.env.HERMESFLLM_CURATION_MAX_PROBES, 20);
-// A verdict older than two passes is too old to exclude a model on.
-export const CURATION_VERDICT_TTL_MS = CURATION_INTERVAL_MS * 2;
+export const CURATION_INTERVAL_MS = positiveInt(process.env.HERMESFLLM_CURATION_INTERVAL_MS, 10 * 60 * 1000);
+export const CURATION_MAX_PROBES = positiveInt(process.env.HERMESFLLM_CURATION_MAX_PROBES, 4);
+export const CURATION_VERDICT_TTL_MS = positiveInt(process.env.HERMESFLLM_CURATION_VERDICT_TTL_MS, 60 * 60 * 1000);
+export const CURATION_DAILY_CAP_PER_PLATFORM = positiveInt(process.env.HERMESFLLM_CURATION_DAILY_CAP, 60);
+export const RESERVE_SIZE = 4;
+// How soon each priority class may be probed again.
+const REPROBE_URGENT_MS = 2 * 60 * 1000;
+const REPROBE_EXCLUDED_MS = 10 * 60 * 1000;
+const REPROBE_RESERVE_MS = 20 * 60 * 1000;
+// A live failure probes its model this soon (debounced), instead of waiting for the next round.
+const URGENT_DELAY_MS = 30 * 1000;
 
 export const DEFAULT_WEIGHTS = { reliability: 0.6, speed: 0.05, intelligence: 0.35 };
 export const DEFAULT_MIN_RELIABILITY = 0.9;
@@ -39,9 +48,12 @@ export function applyDefaultPolicy(): { applied: boolean } {
 }
 
 const modelKey = (platform: string, modelId: string, scope: string | null | undefined) => `${platform}\u0000${modelId}\u0000${scope ?? ''}`;
+const parseTs = (ts: string) => Date.parse(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
+
+// ── Exclusion verdicts ───────────────────────────────────────────────────────
 
 let cache: { at: number; out: Set<string> } | null = null;
-const CACHE_MS = 60 * 1000;
+const CACHE_MS = 30 * 1000;
 
 /** Models whose fresh probes are all 'unavailable' (none 'working'). */
 export function curatedOutModels(now = Date.now()): Set<string> {
@@ -67,31 +79,175 @@ export function resetCurationCache(): void {
   cache = null;
 }
 
+// ── Candidate selection ──────────────────────────────────────────────────────
+
+export type CurationReason = 'live-failure' | 'excluded' | 'reserve' | 'stale';
+export interface CurationCandidate extends ProbeCandidate { reason: CurationReason }
+
+/** One probe target per model: an enabled healthy key, the one probed longest ago. */
+function candidateForModel(modelDbId: number): (ProbeCandidate & { lastProbedAt: string }) | null {
+  const row = getDb().prepare(`
+    SELECT m.id AS modelDbId, m.platform, m.model_id AS modelId, m.endpoint_scope AS endpointScope,
+           k.id AS keyId, COALESCE(p.last_probed_at, '') AS lastProbedAt
+      FROM models m
+      JOIN api_keys k ON k.platform = m.platform AND k.enabled = 1 AND k.status IN ('healthy', 'unknown')
+     LEFT JOIN model_probe_status p
+            ON p.platform = m.platform AND p.model_id = m.model_id
+           AND p.endpoint_scope = m.endpoint_scope AND p.key_id = k.id
+     WHERE m.id = ? AND m.enabled = 1
+     ORDER BY (p.last_probed_at IS NULL) DESC, p.last_probed_at ASC, k.id ASC
+     LIMIT 1
+  `).get(modelDbId) as (ProbeCandidate & { lastProbedAt: string }) | undefined;
+  return row ?? null;
+}
+
+/** Newest probe of any key of this model, in ms; 0 when never probed. */
+function lastProbedMs(c: { platform: string; modelId: string; endpointScope: string }): number {
+  const row = getDb().prepare(`
+    SELECT MAX(last_probed_at) AS at FROM model_probe_status
+     WHERE platform = ? AND model_id = ? AND endpoint_scope = ?
+  `).get(c.platform, c.modelId, c.endpointScope) as { at: string | null };
+  return row.at ? parseTs(row.at) : 0;
+}
+
+/** The warm reserve: the models with the best live success rate in the last 24h. */
+export function reserveModelIds(limit = RESERVE_SIZE): number[] {
+  const rows = getDb().prepare(`
+    SELECT r.model_db_id AS id
+      FROM requests r
+      JOIN models m ON m.id = r.model_db_id AND m.enabled = 1
+     WHERE r.created_at >= datetime('now', '-1 day') AND r.status IN ('success', 'error') AND r.model_db_id IS NOT NULL
+     GROUP BY r.model_db_id
+    HAVING COUNT(*) >= 5
+     ORDER BY (1.0 * SUM(r.status = 'success') / COUNT(*)) DESC, COUNT(*) DESC
+     LIMIT ?
+  `).all(limit) as Array<{ id: number }>;
+  return rows.map(r => r.id);
+}
+
+function excludedModelIds(now: number): number[] {
+  const since = new Date(now - CURATION_VERDICT_TTL_MS).toISOString();
+  const rows = getDb().prepare(`
+    SELECT m.id AS id
+      FROM model_probe_status p
+      JOIN models m ON m.platform = p.platform AND m.model_id = p.model_id AND m.endpoint_scope = p.endpoint_scope
+     WHERE p.last_probed_at >= ? AND m.enabled = 1
+     GROUP BY m.id
+    HAVING SUM(p.status = 'unavailable') > 0 AND SUM(p.status = 'working') = 0
+  `).all(since) as Array<{ id: number }>;
+  return rows.map(r => r.id);
+}
+
+const urgentQueue = new Set<number>();
+const dailyProbes = new Map<string, { day: string; count: number }>();
+
+function dayOf(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+export function probesToday(platform: string, now = Date.now()): number {
+  const entry = dailyProbes.get(platform);
+  return entry && entry.day === dayOf(now) ? entry.count : 0;
+}
+
+export function totalProbesToday(now = Date.now()): number {
+  let total = 0;
+  for (const platform of dailyProbes.keys()) total += probesToday(platform, now);
+  return total;
+}
+
+function countProbe(platform: string, now: number): void {
+  const day = dayOf(now);
+  const entry = dailyProbes.get(platform);
+  dailyProbes.set(platform, entry && entry.day === day ? { day, count: entry.count + 1 } : { day, count: 1 });
+}
+
+/** The next round's targets, highest priority first, at most `limit`, one per model. */
+export function selectCurationCandidates(limit = CURATION_MAX_PROBES, now = Date.now()): CurationCandidate[] {
+  const out: CurationCandidate[] = [];
+  const seen = new Set<number>();
+  const tryAdd = (modelDbId: number, reason: CurationReason, minAgeMs: number): void => {
+    if (out.length >= limit || seen.has(modelDbId)) return;
+    const c = candidateForModel(modelDbId);
+    if (!c) return;
+    seen.add(modelDbId);
+    if (probesToday(c.platform, now) >= CURATION_DAILY_CAP_PER_PLATFORM) return;
+    if (now - lastProbedMs(c) < minAgeMs) return;
+    out.push({ keyId: c.keyId, platform: c.platform, modelId: c.modelId, modelDbId: c.modelDbId, endpointScope: c.endpointScope, reason });
+  };
+
+  for (const id of urgentQueue) tryAdd(id, 'live-failure', REPROBE_URGENT_MS);
+  for (const id of excludedModelIds(now)) tryAdd(id, 'excluded', REPROBE_EXCLUDED_MS);
+  for (const id of reserveModelIds()) tryAdd(id, 'reserve', REPROBE_RESERVE_MS);
+  if (out.length < limit) {
+    for (const row of selectProbeCandidates(getDb(), limit * 2, now)) tryAdd(row.modelDbId, 'stale', CURATION_VERDICT_TTL_MS);
+  }
+  return out;
+}
+
+// ── Rounds ───────────────────────────────────────────────────────────────────
+
+export interface CurationRound {
+  at: string;
+  results: Array<{ platform: string; modelId: string; reason: CurationReason; status: ProbeOutcome['status']; latencyMs?: number }>;
+}
+
 let running = false;
-let lastPass: { at: string; probed: number } | null = null;
+let lastRound: CurationRound | null = null;
 let startedAt: number | null = null;
 
-/** For the dashboard: when the last pass ran and when the next one is due. */
-export function curationSchedule(now = Date.now()): { lastPassAt: string | null; lastProbed: number | null; nextPassAt: string | null } {
+export async function runCurationRound(deps: ModelProbeRequestDeps = {}, now = Date.now()): Promise<CurationRound | null> {
+  if (running) return null;
+  running = true;
+  try {
+    const candidates = selectCurationCandidates(CURATION_MAX_PROBES, now);
+    const results: CurationRound['results'] = [];
+    for (const c of candidates) {
+      countProbe(c.platform, now);
+      const outcome = await probeModel(c, deps);
+      recordProbeResult(getDb(), c, outcome);
+      // Answered or truly down: either way the urgent question is settled.
+      if (outcome.status !== 'error') urgentQueue.delete(c.modelDbId);
+      results.push({ platform: c.platform, modelId: c.modelId, reason: c.reason, status: outcome.status, latencyMs: outcome.latencyMs });
+    }
+    resetCurationCache();
+    lastRound = { at: new Date().toISOString(), results };
+    if (results.length > 0) {
+      console.log(`[Curation] round: ${results.map(r => `${r.platform}/${r.modelId}=${r.status}(${r.reason})`).join(', ')}; excluded now: ${curatedOutModels().size}`);
+    }
+    return lastRound;
+  } finally {
+    running = false;
+  }
+}
+
+let urgentTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Called on a real-traffic failure: probe that model within seconds instead of next round. */
+export function noteLiveFailure(modelDbId: number): void {
+  if (!cancel) return; // curation not running (tests, disabled)
+  urgentQueue.add(modelDbId);
+  if (urgentTimer) return;
+  urgentTimer = setTimeout(() => {
+    urgentTimer = null;
+    runCurationRound().catch(err => console.error('[Curation] urgent round failed:', err));
+  }, URGENT_DELAY_MS);
+  urgentTimer.unref?.();
+}
+
+/** For the dashboard. */
+export function curationStatus(now = Date.now()) {
   let next: number | null = null;
   if (startedAt !== null) {
     const elapsed = Math.max(0, now - startedAt);
     next = startedAt + (Math.floor(elapsed / CURATION_INTERVAL_MS) + 1) * CURATION_INTERVAL_MS;
   }
-  return { lastPassAt: lastPass?.at ?? null, lastProbed: lastPass?.probed ?? null, nextPassAt: next ? new Date(next).toISOString() : null };
-}
-
-export async function runCurationPass(): Promise<void> {
-  if (running) return;
-  running = true;
-  try {
-    const result = await runModelProbePass({ maxProbes: CURATION_MAX_PROBES });
-    lastPass = { at: new Date().toISOString(), probed: Array.isArray((result as any)?.probed) ? (result as any).probed.length : 0 };
-    resetCurationCache();
-    console.log(`[Curation] pass done: ${JSON.stringify(result)}; curated out: ${curatedOutModels().size} model(s)`);
-  } finally {
-    running = false;
-  }
+  return {
+    lastRound,
+    nextRoundAt: next ? new Date(next).toISOString() : null,
+    urgentQueued: urgentQueue.size,
+    probesToday: totalProbesToday(now),
+  };
 }
 
 let cancel: (() => void) | null = null;
@@ -100,14 +256,32 @@ export function startCuration(scheduler: Scheduler): void {
   if (process.env.HERMESFLLM_CURATION_ENABLED === '0') return;
   const { applied } = applyDefaultPolicy();
   if (applied) console.log('[Curation] applied HermesFLLM routing defaults (custom: reliability 0.6, intelligence 0.35, speed 0.05; min reliability 0.9)');
-  console.log(`[Curation] re-evaluating models every ${CURATION_INTERVAL_MS / 3_600_000}h (max ${CURATION_MAX_PROBES} probes/pass)`);
-  // First pass shortly after boot so a fresh install learns quickly, then on the interval.
-  scheduler.after(2 * 60 * 1000, () => runCurationPass().catch(err => console.error('[Curation] pass failed:', err)));
+  console.log(`[Curation] continuous: every ${CURATION_INTERVAL_MS / 60_000}m up to ${CURATION_MAX_PROBES} probes, verdicts last ${CURATION_VERDICT_TTL_MS / 60_000}m, cap ${CURATION_DAILY_CAP_PER_PLATFORM}/platform/day`);
   startedAt = Date.now();
-  cancel = scheduler.every(CURATION_INTERVAL_MS, () => runCurationPass().catch(err => console.error('[Curation] pass failed:', err)), { name: 'hermesfllm-curation' });
+  const round = async (): Promise<void> => {
+    await runCurationRound().catch(err => console.error('[Curation] round failed:', err));
+  };
+  cancel = scheduler.every(CURATION_INTERVAL_MS, round, { name: 'hermesfllm-curation' });
+  scheduler.after(60 * 1000, round);
 }
 
 export function stopCuration(): void {
   cancel?.();
   cancel = null;
+  if (urgentTimer) clearTimeout(urgentTimer);
+  urgentTimer = null;
+}
+
+/** Test seam: forget in-memory state between tests. */
+export function resetCurationState(): void {
+  urgentQueue.clear();
+  dailyProbes.clear();
+  lastRound = null;
+  startedAt = null;
+  resetCurationCache();
+}
+
+/** Test seam: mark curation as running without a scheduler. */
+export function markCurationRunningForTest(on: boolean): void {
+  cancel = on ? () => {} : null;
 }

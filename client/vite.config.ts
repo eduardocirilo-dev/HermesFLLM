@@ -2,6 +2,17 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import { execSync } from 'child_process'
+import { readFileSync } from 'fs'
+
+// HermesFLLM build stamp shown in the dashboard: release version, commit, build time.
+function hermesBuild() {
+  let version = 'dev'
+  let commit: string | null = null
+  try { version = JSON.parse(readFileSync(path.resolve(__dirname, '../hermesfllm.json'), 'utf8')).version } catch { /* keep dev */ }
+  try { commit = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null } catch { /* no git */ }
+  return { version, commit, builtAt: new Date().toISOString() }
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname, '..'), '')
@@ -13,6 +24,7 @@ export default defineConfig(({ mode }) => {
     envDir: path.resolve(__dirname, '..'),
     define: {
       __SERVER_PORT__: JSON.stringify(String(serverPort)),
+      __HERMESFLLM_BUILD__: JSON.stringify(hermesBuild()),
     },
     resolve: {
       alias: {

@@ -22,6 +22,7 @@ import { SettingsDialog } from '@/components/settings-dialog'
 import { UpdatesDialog } from '@/components/updates-dialog'
 import { OPEN_UPDATES_EVENT } from '@/lib/updates'
 import { Toaster } from '@/components/toaster'
+import { BuildBadge } from '@/components/build-badge'
 import { UpdateReminder } from '@/components/update-reminder'
 import { NewBuildPrompt } from '@/components/new-build-prompt'
 import { usePremium } from '@/hooks/use-premium'
@@ -444,6 +445,7 @@ function PageContainer({ children }: { children: ReactNode }) {
   return (
     <main className={fullBleed ? 'flex min-h-0 flex-1 flex-col' : 'mx-auto w-full max-w-6xl px-6 py-8'}>
       {children}
+      {!fullBleed && <BuildBadge className="mt-10 text-center" />}
     </main>
   )
 }
