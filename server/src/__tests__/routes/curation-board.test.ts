@@ -77,4 +77,14 @@ describe('buildHealthBoard', () => {
     const board = buildHealthBoard();
     expect(board.race).toMatchObject({ enabled: true, races: expect.any(Number), backupWins: expect.any(Number), minDelayMs: 3000, maxDelayMs: 15000 });
   });
+
+  it('marks a model that ranks by success but averages above the latency ceiling as slow', () => {
+    for (let i = 0; i < 5; i++) request('quick', 'success', null, 2_000);
+    for (let i = 0; i < 5; i++) request('crawler', 'success', null, 106_000);
+    resetCurationCache();
+    const board = buildHealthBoard();
+    const byId = Object.fromEntries(board.topModels.map(m => [m.modelId, m]));
+    expect(byId.crawler).toMatchObject({ successRate: 1, slow: true });
+    expect(byId.quick).toMatchObject({ successRate: 1, slow: false });
+  });
 });

@@ -173,6 +173,7 @@ describe('shadow comparison', () => {
     streamChatCompletion
       .mockImplementationOnce(async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
         await new Promise((_, reject) => opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true }));
+        yield { choices: [] }; // never reached: the wait above only ends by rejecting
       })
       .mockImplementationOnce(async function* () {
         yield { choices: [{ delta: { content: 'backup answer' } }] };

@@ -73,3 +73,11 @@ describe('formatTtfb', () => {
     expect(formatTtfb({ p50: null, p90: null, n: 0 })).toBe('—')
   })
 })
+
+describe('raceShares with a winner that failed', () => {
+  it('gives every race outcome its own segment, so the bar always fills', () => {
+    const shares = raceShares({ races: 14, backupWins: 5, primaryWins: 8, winnerFailed: 1, bothFailed: 0 })
+    expect(shares.map(s => s.key)).toEqual(['backup', 'primary', 'winner'])
+    expect(shares.reduce((sum, s) => sum + s.share, 0)).toBeCloseTo(1)
+  })
+})

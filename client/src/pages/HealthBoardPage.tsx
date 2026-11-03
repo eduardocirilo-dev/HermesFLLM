@@ -44,7 +44,7 @@ export interface HealthBoard {
     total24h: number
     total7d: number
   }
-  race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
+  race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; winnerFailed?: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
   shadow?: {
     enabled: boolean
     sampleRate: number | null
@@ -58,7 +58,7 @@ export interface HealthBoard {
     winners: Record<'validToolCall' | 'ttfbP50' | 'ttfbP90' | 'noAnswer', ShadowWinner>
   }
   traffic: { requests24h: number; successRate24h: number | null }
-  topModels: Array<{ platform: string; modelId: string; name: string; intelligenceRank: number | null; requests: number; successRate: number; avgLatencyMs: number | null }>
+  topModels: Array<{ platform: string; modelId: string; name: string; intelligenceRank: number | null; requests: number; successRate: number; avgLatencyMs: number | null; slow?: boolean }>
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
@@ -94,11 +94,12 @@ export function formatCountdown(targetIso: string | null, now: number): string |
 }
 
 /** Shares of the race outcomes, for the stacked bar. Empty when no race ran. */
-export function raceShares(race: { races: number; backupWins: number; primaryWins: number; bothFailed: number }) {
+export function raceShares(race: { races: number; backupWins: number; primaryWins: number; bothFailed: number; winnerFailed?: number }) {
   if (race.races <= 0) return []
   return [
     { key: 'backup', share: race.backupWins / race.races, className: 'bg-emerald-500' },
     { key: 'primary', share: race.primaryWins / race.races, className: 'bg-sky-500' },
+    { key: 'winner', share: (race.winnerFailed ?? 0) / race.races, className: 'bg-amber-500' },
     { key: 'both', share: race.bothFailed / race.races, className: 'bg-red-500' },
   ].filter(s => s.share > 0)
 }
@@ -189,7 +190,7 @@ function RaceCard({ race, now }: { race: NonNullable<HealthBoard['race']>; now: 
               {shares.map(s => <div key={s.key} className={cn('h-full transition-all', s.className)} style={{ width: `${s.share * 100}%` }} />)}
             </div>
             <p className="text-xs text-muted-foreground">
-              {t('healthBoard.raceSummary', { races: race.races, backup: race.backupWins, primary: race.primaryWins, both: race.bothFailed })}
+              {t('healthBoard.raceSummary', { races: race.races, backup: race.backupWins, primary: race.primaryWins, winner: race.winnerFailed ?? 0, both: race.bothFailed })}
             </p>
             {avgS && <p className="text-xs text-muted-foreground">{t('healthBoard.raceAvg', { seconds: avgS })}</p>}
           </>
@@ -376,6 +377,11 @@ export default function HealthBoardPage() {
                               {m.intelligenceRank !== null && (
                                 <Badge variant="outline" className="shrink-0 gap-1"><Brain className="h-3 w-3" />{m.intelligenceRank}</Badge>
                               )}
+                              {m.slow && (
+                                <Badge variant="outline" className="shrink-0 gap-1 border-amber-500/50 text-amber-600 dark:text-amber-400" title={t('healthBoard.slowHint')}>
+                                  <Clock className="h-3 w-3" />{t('healthBoard.slow')}
+                                </Badge>
+                              )}
                             </div>
                             <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                               <div className={cn('h-full rounded-full transition-[width] duration-700', toneBar[tone])} style={{ width: pct(m.successRate) }} />
@@ -384,7 +390,7 @@ export default function HealthBoardPage() {
                           <div className="text-right text-xs tabular-nums">
                             <span className={cn('font-semibold', toneText[tone])}>{pct(m.successRate)}</span>
                             <span className="block text-muted-foreground">
-                              {m.requests} · {m.avgLatencyMs !== null ? `${(m.avgLatencyMs / 1000).toFixed(1)}s` : '—'}
+                              {m.requests} · <span className={cn(m.slow && 'font-medium text-amber-600 dark:text-amber-400')}>{m.avgLatencyMs !== null ? `${(m.avgLatencyMs / 1000).toFixed(1)}s` : '—'}</span>
                             </span>
                           </div>
                         </li>

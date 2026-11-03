@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getDb } from '../db/index.js';
 import { getCustomWeights, getMinReliabilityFloor, getRoutingStrategy } from '../services/router.js';
-import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, curationStatus, reserveModelIds } from '../services/curation.js';
+import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, MAX_LATENCY_MS, curationStatus, reserveModelIds, slowModelIds } from '../services/curation.js';
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
 import { governorConfig } from '../lib/hermes-governor.js';
@@ -57,6 +57,7 @@ export function buildHealthBoard(now = Date.now()) {
 
   const top = db.prepare(`
     SELECT r.platform, r.model_id, COALESCE(m.display_name, r.model_id) AS name, m.intelligence_rank,
+           MAX(r.model_db_id) AS model_db_id,
            COUNT(*) AS requests,
            SUM(r.status = 'success') AS successes,
            CAST(AVG(CASE WHEN r.status = 'success' THEN r.latency_ms END) AS INTEGER) AS avg_latency_ms
@@ -67,7 +68,10 @@ export function buildHealthBoard(now = Date.now()) {
     HAVING COUNT(*) >= ?
      ORDER BY (1.0 * SUM(r.status = 'success') / COUNT(*)) DESC, COUNT(*) DESC
      LIMIT 12
-  `).all(MIN_REQUESTS) as Array<{ platform: string; model_id: string; name: string; intelligence_rank: number | null; requests: number; successes: number; avg_latency_ms: number | null }>;
+  `).all(MIN_REQUESTS) as Array<{ platform: string; model_id: string; name: string; intelligence_rank: number | null; model_db_id: number | null; requests: number; successes: number; avg_latency_ms: number | null }>;
+  // The same verdict routing uses (6h window): a slow model ranks here by success, but the router
+  // sends it to the back of the chain, and the board must say so.
+  const slow = slowModelIds();
 
   const guard = db.prepare(`
     SELECT SUM(created_at >= datetime('now', '-1 day')) AS day,
@@ -158,6 +162,7 @@ export function buildHealthBoard(now = Date.now()) {
       requests: t.requests,
       successRate: t.successes / t.requests,
       avgLatencyMs: t.avg_latency_ms,
+      slow: (t.model_db_id != null && slow.has(t.model_db_id)) || (t.avg_latency_ms ?? 0) > MAX_LATENCY_MS,
     })),
   };
 }
