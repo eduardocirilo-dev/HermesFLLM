@@ -1,4 +1,5 @@
 import { getDb, getSetting, setSetting } from '../db/index.js';
+import { isCuratedOut } from './curation.js';
 import { getProvider, hasProvider, resolveProvider } from '../providers/index.js';
 import { decrypt } from '../lib/crypto.js';
 import { decryptProxyUrl } from '../lib/key-proxy.js';
@@ -2385,6 +2386,9 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     // put on cooldown — so this is a fast-path, not the only guard. If every
     // model is too small, the loop falls through and the caller gets the normal
     // "all models exhausted" error rather than a wasted sweep.
+    // HermesFLLM curation: a model whose recent probes all failed is skipped until it passes again.
+    if (isCuratedOut(entry)) { diag.push(`${label}: failed the last curation probes`); continue; }
+
     if (!fitsContextWindowStrict(entry.context_window, estimatedTokens)) {
       // Keep the `< estimated` substring — summarizeExhaustion buckets prompt
       // overflow off it. Emit the EFFECTIVE number so the line doesn't read as
