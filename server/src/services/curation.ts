@@ -185,21 +185,57 @@ function dayOf(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
+// The daily cap protects free quota, so it must survive restarts: launchd restarts the server on
+// every crash and login, and an in-memory counter reset each time let a crash loop probe without
+// limit. The counts live in one settings row, written once per probe (at most 4 per round).
+const PROBE_COUNTS_KEY = 'hermesfllm_probe_counts';
+let probeCountsLoaded = false;
+
+function loadProbeCounts(): void {
+  if (probeCountsLoaded) return;
+  probeCountsLoaded = true;
+  try {
+    const raw = getSetting(PROBE_COUNTS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { day?: string; counts?: Record<string, number> };
+    if (typeof saved.day !== 'string' || !saved.counts) return;
+    for (const [platform, count] of Object.entries(saved.counts)) {
+      if (Number.isInteger(count) && count > 0) dailyProbes.set(platform, { day: saved.day, count });
+    }
+  } catch {
+    // A corrupt row only costs today's history; never block curation on it.
+  }
+}
+
+function saveProbeCounts(day: string): void {
+  const counts: Record<string, number> = {};
+  for (const [platform, entry] of dailyProbes) if (entry.day === day) counts[platform] = entry.count;
+  try {
+    setSetting(PROBE_COUNTS_KEY, JSON.stringify({ day, counts }));
+  } catch (err) {
+    console.warn('[Curation] could not persist the daily probe counts:', (err as Error)?.message);
+  }
+}
+
 export function probesToday(platform: string, now = Date.now()): number {
+  loadProbeCounts();
   const entry = dailyProbes.get(platform);
   return entry && entry.day === dayOf(now) ? entry.count : 0;
 }
 
 export function totalProbesToday(now = Date.now()): number {
+  loadProbeCounts();
   let total = 0;
   for (const platform of dailyProbes.keys()) total += probesToday(platform, now);
   return total;
 }
 
 function countProbe(platform: string, now: number): void {
+  loadProbeCounts();
   const day = dayOf(now);
   const entry = dailyProbes.get(platform);
   dailyProbes.set(platform, entry && entry.day === day ? { day, count: entry.count + 1 } : { day, count: 1 });
+  saveProbeCounts(day);
 }
 
 /** The next round's targets, highest priority first, at most `limit`, one per model. */
@@ -370,10 +406,17 @@ export function stopCuration(): void {
   urgentTimer = null;
 }
 
-/** Test seam: forget in-memory state between tests. */
-export function resetCurationState(): void {
+/**
+ * Test seam: forget curation state between tests. `{ restartOnly: true }` keeps what is persisted
+ * (the daily probe counts), which is what a process restart does.
+ */
+export function resetCurationState(opts: { restartOnly?: boolean } = {}): void {
   urgentQueue.clear();
   dailyProbes.clear();
+  probeCountsLoaded = false;
+  if (!opts.restartOnly) {
+    try { setSetting(PROBE_COUNTS_KEY, ''); } catch { /* DB not ready */ }
+  }
   lastRound = null;
   startedAt = null;
   resetCurationCache();

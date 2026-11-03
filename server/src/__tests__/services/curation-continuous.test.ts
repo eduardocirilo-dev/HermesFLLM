@@ -98,6 +98,27 @@ describe('runCurationRound', () => {
     expect(calls).toBe(CURATION_DAILY_CAP_PER_PLATFORM);
   });
 
+  // Regression: the counter lived only in memory, so every launchd restart (crash or login) reset
+  // it and a crash loop could probe far past the daily cap.
+  it('keeps the daily cap across a restart', async () => {
+    let calls = 0;
+    for (let i = 0; i < Math.ceil(CURATION_DAILY_CAP_PER_PLATFORM / 4) + 2; i++) {
+      getDb().prepare('DELETE FROM model_probe_status').run();
+      await runCurationRound({ chat: async () => { calls++; } });
+      resetCurationState({ restartOnly: true }); // a restart after every round
+    }
+    expect(calls).toBe(CURATION_DAILY_CAP_PER_PLATFORM);
+    expect(curationStatus().probesToday).toBe(CURATION_DAILY_CAP_PER_PLATFORM);
+  });
+
+  it('starts a new day from zero', async () => {
+    const yesterday = Date.now() - 24 * 60 * 60 * 1000;
+    await runCurationRound({ chat: async () => {} }, yesterday);
+    resetCurationState({ restartOnly: true });
+    expect(curationStatus(yesterday).probesToday).toBe(4);
+    expect(curationStatus().probesToday).toBe(0);
+  });
+
   it('drops a model from the urgent queue once it has an answer', async () => {
     markCurationRunningForTest(true);
     noteLiveFailure(2);
