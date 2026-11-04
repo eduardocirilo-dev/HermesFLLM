@@ -4,7 +4,6 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { initDb, getDb } from '../../db/index.js';
 import {
   CURATION_DAILY_CAP_PER_PLATFORM,
-  INCONCLUSIVE_LIMIT,
   curationStatus,
   isCuratedOut,
   markCurationRunningForTest,
@@ -280,30 +279,6 @@ describe('busy providers are inconclusive', () => {
     expect(buildHealthBoard().curation.excluded.map(m => m.modelId)).toEqual(['m1']);
     // Just probed: not picked again in the next round.
     expect(selectCurationCandidates().map(c => c.modelId)).not.toContain('m1');
-  });
-
-  it('a model that never answers is excluded after a few inconclusive probes, and leaves the urgent queue', async () => {
-    markCurationRunningForTest(true);
-    noteLiveFailure(1);
-    const timeout = { chat: async (c: any) => { if (c.modelId === 'm1') throw new Error('agent probe failed: timeout'); } };
-    for (let i = 1; i < INCONCLUSIVE_LIMIT; i++) {
-      const round = await runCurationRound(timeout);
-      expect(round?.results.find(r => r.modelId === 'm1')?.status).toBe('error');
-      expect(isCuratedOut({ platform: 'p', model_id: 'm1', endpoint_scope: '' })).toBe(false);
-    }
-    const round = await runCurationRound(timeout);
-    expect(round?.results.find(r => r.modelId === 'm1')?.status).toBe('unavailable');
-    expect(isCuratedOut({ platform: 'p', model_id: 'm1', endpoint_scope: '' })).toBe(true);
-    expect(curationStatus().urgentQueued).toBe(0);
-  });
-
-  it('busy answers never add up to an exclusion', async () => {
-    markCurationRunningForTest(true);
-    noteLiveFailure(1);
-    for (let i = 0; i < INCONCLUSIVE_LIMIT + 1; i++) {
-      await runCurationRound({ chat: async c => { if (c.modelId === 'm1') throw new Error('API error 503: high demand'); } });
-    }
-    expect(isCuratedOut({ platform: 'p', model_id: 'm1', endpoint_scope: '' })).toBe(false);
   });
 
   it('a busy probe does not exclude the model', async () => {

@@ -26,9 +26,6 @@ const REPROBE_EXCLUDED_MS = 10 * 60 * 1000;
 const REPROBE_RESERVE_MS = 20 * 60 * 1000;
 // A live failure probes its model this soon (debounced), instead of waiting for the next round.
 const URGENT_DELAY_MS = 30 * 1000;
-// A model that times out on every probe never gets a verdict ('error' is inconclusive), so it was
-// never excluded and stayed in the urgent queue for good. This many in a row count as unavailable.
-export const INCONCLUSIVE_LIMIT = 3;
 
 // Speed carries real weight: an agent times out on a slow model even when its answer is right.
 export const DEFAULT_WEIGHTS = { reliability: 0.55, speed: 0.15, intelligence: 0.3 };
@@ -182,7 +179,6 @@ function excludedModelIds(now: number): number[] {
 }
 
 const urgentQueue = new Set<number>();
-const inconclusiveStreak = new Map<number, number>();
 const dailyProbes = new Map<string, { day: string; count: number }>();
 
 function dayOf(now: number): string {
@@ -403,16 +399,8 @@ export async function runCurationRound(deps: ModelProbeRequestDeps = {}, now = D
       countProbe(c.platform, now);
       let outcome = await probeModel(c, { chat: deps.chat ?? agentProbeChat });
       if (outcome.status === 'unavailable' && isBusyProbeError(outcome.error)) {
-        // Busy is not the model's fault: never counts toward the streak below.
         outcome = { status: 'error', error: `inconclusive (provider busy): ${outcome.error}` };
-      } else if (outcome.status === 'error') {
-        const streak = (inconclusiveStreak.get(c.modelDbId) ?? 0) + 1;
-        inconclusiveStreak.set(c.modelDbId, streak);
-        if (streak >= INCONCLUSIVE_LIMIT) {
-          outcome = { status: 'unavailable', error: `no answer in ${streak} probes in a row: ${outcome.error ?? 'probe error'}` };
-        }
       }
-      if (outcome.status !== 'error') inconclusiveStreak.delete(c.modelDbId);
       recordProbeResult(getDb(), c, outcome);
       // Answered or truly down: either way the urgent question is settled.
       if (outcome.status !== 'error') urgentQueue.delete(c.modelDbId);
@@ -486,7 +474,6 @@ export function stopCuration(): void {
  */
 export function resetCurationState(opts: { restartOnly?: boolean } = {}): void {
   urgentQueue.clear();
-  inconclusiveStreak.clear();
   dailyProbes.clear();
   probeCountsLoaded = false;
   if (!opts.restartOnly) {
