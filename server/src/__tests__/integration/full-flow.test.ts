@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Express } from 'express';
 import { createApp } from '../../app.js';
 import { initDb, getDb, getUnifiedApiKey } from '../../db/index.js';
@@ -43,6 +43,11 @@ describe('Full Integration Flow', () => {
     const db = getDb();
     db.prepare('DELETE FROM api_keys').run();
     db.prepare('DELETE FROM requests').run();
+  });
+
+  // Release the in-memory database when the flow is done, like the other suites that open one.
+  afterAll(() => {
+    getDb().close();
   });
 
   it('Step 1: Verify models are seeded', async () => {

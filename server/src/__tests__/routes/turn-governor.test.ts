@@ -107,6 +107,7 @@ function slowSteadyToolCall(ms: number) {
 function silent() {
   return async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
     await waitAbort(opts.signal);
+    yield { choices: [] }; // never reached: the wait above only ends by rejecting
   };
 }
 
