@@ -1,0 +1,29 @@
+name: Windows bootstrap
+
+# HermesFLLM-only. scripts/dev-bootstrap.ps1 has tests in scripts/dev-bootstrap.test.mjs, but they
+# skip outside Windows and the main CI runs on Ubuntu only, so they never ran anywhere: on Linux and
+# macOS the bootstrap suite reports 2 of 4 tests (the Bash pair). This job runs the PowerShell pair.
+on:
+  push:
+    branches: [main]
+    paths: ['scripts/dev-bootstrap.*', '.github/workflows/windows-bootstrap.yml']
+  pull_request:
+    branches: [main]
+    paths: ['scripts/dev-bootstrap.*', '.github/workflows/windows-bootstrap.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell:
+    name: PowerShell bootstrap (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      # The tests build their own throwaway project; no npm ci needed.
+      - name: Run the bootstrap tests
+        run: node --test scripts/dev-bootstrap.test.mjs
