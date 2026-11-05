@@ -7,6 +7,7 @@ import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
 import { governorConfig } from '../lib/hermes-governor.js';
 import { shadowStats } from '../lib/hermes-shadow.js';
+import { DEFAULT_DEMOTION_FACTOR, getDemotions, setDemotion } from '../lib/hermes-demotions.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
 // excluded and why, and how many broken agent turns the Agent Guard caught.
@@ -169,4 +170,86 @@ export function buildHealthBoard(now = Date.now()) {
 
 curationRouter.get('/', (_req: Request, res: Response) => {
   res.json(buildHealthBoard());
+});
+
+// ── Model forensics: where the agent's time goes ─────────────────────────────
+// The health board counts rescues; it did not say WHICH model costs the agent time, so diagnosing
+// meant SQL against the database. This ranks models by time lost on failed attempts in 24h (every
+// failed attempt is time the agent waited for nothing before failover), split by cause, and
+// carries the runtime demotion each model has so the board can act on it in one click.
+
+export interface ModelForensics {
+  platform: string;
+  modelId: string;
+  name: string;
+  requests: number;
+  successes: number;
+  failed: number;
+  wastedMs: number;
+  avgFirstMs: number | null;
+  causes: { stall: number; runaway: number; guard: number; deadline: number; rateLimit: number; other: number };
+  demotion: number | null;
+}
+
+export function buildForensics(limit = 15): { totalWastedMs: number; totalFailed: number; models: ModelForensics[] } {
+  const rows = getDb().prepare(`
+    SELECT r.platform, r.model_id, COALESCE(MAX(m.display_name), r.model_id) AS name,
+           COUNT(*) AS requests,
+           SUM(r.status = 'success') AS ok,
+           SUM(r.status = 'error') AS failed,
+           SUM(CASE WHEN r.status = 'error' THEN MAX(r.latency_ms, 0) ELSE 0 END) AS wasted_ms,
+           CAST(AVG(CASE WHEN r.status = 'success' THEN COALESCE(r.ttfb_ms, r.latency_ms) END) AS INTEGER) AS avg_first_ms,
+           SUM(r.error LIKE '%agent governor:%stopped making progress%') AS stall,
+           SUM(r.error LIKE '%agent governor:%is looping%' OR r.error LIKE '%agent governor:%exceeded the turn ceiling%') AS runaway,
+           SUM(r.error LIKE '%agent guard:%') AS guard,
+           SUM(r.error LIKE '%agent deadline:%') AS deadline,
+           SUM(r.status = 'error' AND r.error NOT LIKE '%agent %' AND (r.error LIKE '%429%' OR LOWER(r.error) LIKE '%rate limit%' OR LOWER(r.error) LIKE '%rate_limit%')) AS rate_limit
+      FROM requests r
+      LEFT JOIN models m ON m.id = r.model_db_id
+     WHERE r.created_at >= datetime('now', '-1 day') AND r.status IN ('success', 'error')
+     GROUP BY r.platform, r.model_id
+  `).all() as Array<{ platform: string; model_id: string; name: string; requests: number; ok: number; failed: number; wasted_ms: number; avg_first_ms: number | null; stall: number; runaway: number; guard: number; deadline: number; rate_limit: number }>;
+
+  const demotions = getDemotions();
+  const models = rows
+    .filter(r => r.failed > 0)
+    .map((r): ModelForensics => {
+      const named = r.stall + r.runaway + r.guard + r.deadline + r.rate_limit;
+      return {
+        platform: r.platform,
+        modelId: r.model_id,
+        name: r.name,
+        requests: r.requests,
+        successes: r.ok,
+        failed: r.failed,
+        wastedMs: r.wasted_ms,
+        avgFirstMs: r.avg_first_ms,
+        causes: { stall: r.stall, runaway: r.runaway, guard: r.guard, deadline: r.deadline, rateLimit: r.rate_limit, other: Math.max(0, r.failed - named) },
+        demotion: demotions.get(r.model_id) ?? null,
+      };
+    })
+    .sort((a, b) => b.wastedMs - a.wastedMs || b.failed - a.failed);
+
+  return {
+    totalWastedMs: models.reduce((sum, m) => sum + m.wastedMs, 0),
+    totalFailed: models.reduce((sum, m) => sum + m.failed, 0),
+    models: models.slice(0, limit),
+  };
+}
+
+curationRouter.get('/forensics', (_req: Request, res: Response) => {
+  res.json({ ...buildForensics(), demotions: Object.fromEntries(getDemotions()) });
+});
+
+/** Body: { modelId, demote: true } applies the default demotion, { modelId, demote: false } restores. */
+curationRouter.put('/demotions', (req: Request, res: Response) => {
+  const modelId = typeof req.body?.modelId === 'string' ? req.body.modelId.trim() : '';
+  const demote = req.body?.demote;
+  if (!modelId || modelId.length > 300 || typeof demote !== 'boolean') {
+    res.status(400).json({ error: { message: 'expected { modelId: string, demote: boolean }' } });
+    return;
+  }
+  const next = setDemotion(modelId, demote ? DEFAULT_DEMOTION_FACTOR : null);
+  console.log(`[Demotions] ${modelId} ${demote ? `demoted to x${DEFAULT_DEMOTION_FACTOR}` : 'restored'} from the dashboard`);
+  res.json({ demotions: Object.fromEntries(next) });
 });

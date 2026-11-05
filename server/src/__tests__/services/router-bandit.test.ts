@@ -8,6 +8,7 @@ import {
 } from '../../services/router.js';
 import { BANDIT_PRESETS, DEFAULT_PEAK_HOURS } from '../../services/scoring.js';
 import { resetModelWeightOverrides } from '../../services/model-weight-overrides.js';
+import { setDemotion, resetDemotionCache } from '../../lib/hermes-demotions.js';
 import * as ratelimit from '../../services/ratelimit.js';
 import { getDb, initDb } from '../../db/index.js';
 import { addToActiveChain } from '../helpers/chain.js';
@@ -378,6 +379,33 @@ describe('bandit router', () => {
       if (prev === undefined) delete process.env.MODEL_ROUTING_OVERRIDES;
       else process.env.MODEL_ROUTING_OVERRIDES = prev;
       resetModelWeightOverrides();
+    }
+  });
+
+  it('a dashboard demotion scales the score and steers routing away, and restoring undoes it', () => {
+    addModel({ platform: 'google', modelId: 'stalls', name: 'Stalls', intelligenceRank: 1, sizeLabel: 'Frontier', budget: '~50M', priority: 1 });
+    addModel({ platform: 'groq', modelId: 'steady', name: 'Steady', intelligenceRank: 1, sizeLabel: 'Frontier', budget: '~50M', priority: 2 });
+    // Equal histories: without a demotion the two are a coin flip.
+    addHistory('google', 'stalls', { successes: 200, failures: 0, outTokens: 1000, latencyMs: 300, ttfbMs: 100 });
+    addHistory('groq', 'steady', { successes: 200, failures: 0, outTokens: 1000, latencyMs: 300, ttfbMs: 100 });
+    setRoutingStrategy('balanced');
+    refreshStatsCache(getDb(), true);
+    resetDemotionCache();
+    try {
+      const before = Object.fromEntries(getRoutingScores().scores.map(s => [s.modelId, s.score]));
+      setDemotion('stalls', 0.4);
+      const after = Object.fromEntries(getRoutingScores().scores.map(s => [s.modelId, s.score]));
+      expect(after.stalls).toBeCloseTo(before.stalls * 0.4, 5);
+      expect(after.steady).toBeCloseTo(before.steady, 5);
+      const counts = pickCounts(200);
+      expect(counts['steady'] ?? 0).toBeGreaterThan(counts['stalls'] ?? 0);
+
+      setDemotion('stalls', null);
+      const restored = Object.fromEntries(getRoutingScores().scores.map(s => [s.modelId, s.score]));
+      expect(restored.stalls).toBeCloseTo(before.stalls, 5);
+    } finally {
+      setDemotion('stalls', null);
+      resetDemotionCache();
     }
   });
 

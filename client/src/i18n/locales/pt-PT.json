@@ -1382,7 +1382,21 @@
     "shadowTooFew": "Ainda sem dados para decidir: {pairs} de {min} turnos iguais.",
     "shadowVerdict": "O HermesFLLM é melhor em {wins} de {total} métricas, em {pairs} turnos iguais nos últimos {days} dias (primeiro token comparado no p90).",
     "slow": "lento",
-    "slowHint": "Média acima do teto de latência: o router manda-o para o fim da fila, seja qual for a taxa de sucesso"
+    "slowHint": "Média acima do teto de latência: o router manda-o para o fim da fila, seja qual for a taxa de sucesso",
+    "forensicsTitle": "Onde o agente perde tempo",
+    "forensicsDescription": "Tentativas falhadas nas últimas 24h, por modelo: cada uma é tempo que o agente esperou antes do fallback. As mais longas primeiro.",
+    "forensicsTotal": "{time} perdidos · {failed} tentativas falhadas",
+    "forensicsEmpty": "Nenhuma tentativa falhada nas últimas 24h.",
+    "forensicsFailed": "{failed} de {requests} tentativas falharam",
+    "forensicsDemote": "Baixar prioridade",
+    "forensicsRestore": "Repor",
+    "forensicsHint": "Baixar prioridade multiplica a pontuação do modelo por 0,4 a partir do próximo pedido, sem reiniciar. Continua disponível quando nada melhor pode responder.",
+    "causeStall": "Parou a meio",
+    "causeRunaway": "Em ciclo ou sem fim",
+    "causeGuard": "Tool call estragada",
+    "causeDeadline": "Calado no arranque",
+    "causeRateLimit": "Limite de pedidos",
+    "causeOther": "Outros erros"
   },
   "build": {
     "updated": "atualizado"

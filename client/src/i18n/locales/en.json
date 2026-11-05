@@ -1382,7 +1382,21 @@
     "shadowTooFew": "Not enough data to decide: {pairs} of {min} identical turns.",
     "shadowVerdict": "HermesFLLM is better on {wins} of {total} metrics, over {pairs} identical turns in {days} days (first token compared at p90).",
     "slow": "slow",
-    "slowHint": "Averages above the latency ceiling: routing sends it to the back of the chain, whatever its success rate"
+    "slowHint": "Averages above the latency ceiling: routing sends it to the back of the chain, whatever its success rate",
+    "forensicsTitle": "Where the agent loses time",
+    "forensicsDescription": "Failed attempts in the last 24h, by model: each one is time the agent waited before failing over. Longest first.",
+    "forensicsTotal": "{time} lost · {failed} failed attempts",
+    "forensicsEmpty": "No failed attempts in the last 24h.",
+    "forensicsFailed": "{failed} of {requests} attempts failed",
+    "forensicsDemote": "Lower priority",
+    "forensicsRestore": "Restore",
+    "forensicsHint": "Lower priority multiplies the model's routing score by 0.4 from the next request, with no restart. It stays available when nothing better can answer.",
+    "causeStall": "Stalled mid-turn",
+    "causeRunaway": "Looping or endless",
+    "causeGuard": "Broken tool call",
+    "causeDeadline": "Silent at start",
+    "causeRateLimit": "Rate limit",
+    "causeOther": "Other errors"
   },
   "build": {
     "updated": "updated"
