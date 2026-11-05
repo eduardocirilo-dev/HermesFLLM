@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { I18nProvider } from '@/i18n'
 import { apiFetch } from '@/lib/api'
-import { AgentQualityCard, qualityTone, type QualityResponse } from './agent-quality-card'
+import { AgentQualityCard, factorLabel, qualityTone, type QualityResponse } from './agent-quality-card'
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }))
 
@@ -63,5 +63,31 @@ describe('AgentQualityCard', () => {
     state = { events: 3, models: [] }
     await render()
     expect(container.textContent).toContain('Reports are arriving')
+  })
+
+  it('shows each model\'s success by agent phase, with how much it moves routing, and the phase routing tally', async () => {
+    state = {
+      events: 120,
+      models: [{
+        modelId: 'mixed', toolCalls: 40, toolErrors: 10, toolSuccessRate: 0.75, turns: 0, turnsCompleted: 0, turnsFailed: 0, turnCompletionRate: null, topErrorType: null,
+        phases: [
+          { phase: 'edit', calls: 20, errors: 0, rate: 1, factor: 1.08 },
+          { phase: 'shell', calls: 20, errors: 10, rate: 0.5, factor: 0.7 },
+        ],
+      }],
+      phaseRouting: { enabled: true, turns: { edit: 4, shell: 3, explore: 2, web: 1 }, stickyBroken: 2, since: new Date().toISOString() },
+    }
+    await render()
+    const text = container.querySelector('li')!.textContent!
+    expect(text).toContain('edit100%+8%')
+    expect(text).toContain('shell50%−30%')
+    expect(container.textContent).toContain('4 editing, 3 shell, 2 exploring, 1 web')
+    expect(container.textContent).toContain('2 times')
+  })
+})
+
+describe('factorLabel', () => {
+  it('shows the routing shift and nothing when it is neutral', () => {
+    expect([factorLabel(1), factorLabel(1.004), factorLabel(1.15), factorLabel(0.6)]).toEqual(['', '', '+15%', '−40%'])
   })
 })

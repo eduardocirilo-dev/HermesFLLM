@@ -32,6 +32,7 @@ import { TIMEOUT_ERROR_MARKERS, isProviderMomentFailure } from '../lib/error-cla
 import { checkMonthlyBudget, reserveMonthlyBudget } from './key-budget.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
 import { demotionFactor } from '../lib/hermes-demotions.js';
+import { phaseFactor, type AgentPhase } from '../lib/hermes-phase.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
 import { parseBudget } from '../lib/budget.js';
 import { platformDropsResponseFormat } from '../lib/sampling-params.js';
@@ -1205,7 +1206,7 @@ export function applyReliabilityFloor(chain: ChainRow[]): ChainRow[] {
  * faithful reflection of the user's picked strategy, not a re-sampled draw each
  * request. Priority mode is deterministic either way.
  */
-function orderChain(chain: ChainRow[], strategy: RoutingStrategy, sampled = true, task?: 'code' | 'chat'): ChainRow[] {
+function orderChain(chain: ChainRow[], strategy: RoutingStrategy, sampled = true, task?: 'code' | 'chat', phase?: AgentPhase | null): ChainRow[] {
   // Tier first, always: it is the one ordering input that score must not be able
   // to override (see ChainRow.match_tier). Zero for every chain built anywhere
   // else, so this is a no-op outside slug-fallback resolution.
@@ -1268,7 +1269,8 @@ function orderChain(chain: ChainRow[], strategy: RoutingStrategy, sampled = true
   const headroomCfg = getHeadroomThresholds();
 
   return chain
-    .map(e => ({ e, s: scoreChainEntry(e, weights, intelMin, intelMax, sampled, keyCounts, headroomCfg).score }))
+    // HermesFLLM phase routing: each model's tool success rate in what the agent is doing now.
+    .map(e => ({ e, s: scoreChainEntry(e, weights, intelMin, intelMax, sampled, keyCounts, headroomCfg).score * phaseFactor(e.model_id, phase) }))
     // Higher score first WITHIN a tier; manual priority breaks ties so the chain
     // still matters.
     .sort((a, b) => tier(a.e) - tier(b.e) || b.s - a.s || a.e.priority - b.e.priority)
@@ -2187,7 +2189,7 @@ export function resolveFusionCandidate(modelId: string): FusionCandidate | null 
  *   global one. Set by the `auto:<axis>` aliases (ResolvedChain.strategyOverride,
  *   #1628); leave unset everywhere else.
  */
-export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat', strategyOverride?: PresetStrategy): RouteResult {
+export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat', strategyOverride?: PresetStrategy, phase?: AgentPhase | null): RouteResult {
   const db = getDb();
 
   // The alias's axis wins for this request (#1628): scoring the prefetched
@@ -2200,7 +2202,7 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
 
   const chain = (prefetchedChain ?? getActiveChain(db)).filter(e => e.enabled);
 
-  const sortedChain = orderChain(chain, strategy, true, task);
+  const sortedChain = orderChain(chain, strategy, true, task, phase);
 
   // Exploration toggle (#685/#707 follow-up): when enabled, give a model with
   // no reliability/speed samples a guaranteed chance to be tried, so it stops

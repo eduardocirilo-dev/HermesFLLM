@@ -2,6 +2,7 @@ import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME, attemp
 import { governorConfig, TurnGovernor } from '../lib/hermes-governor.js';
 import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
 import { fitContext } from '../lib/hermes-context-fit.js';
+import { breaksStickiness, derivePhase, isPhaseRoutingEnabled, notePhase } from '../lib/hermes-phase.js';
 import crypto from 'crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -2543,6 +2544,18 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   const routingPick = await applyDecisionRouting(messages, { pinned: pinnedModelId != null || preferredModel != null, preset: resolvedChain?.strategyOverride, signal: clientAbort.signal });
   if (routingPick && !res.headersSent) res.setHeader('X-FreeLLM-Routing-Strategy', routingStrategyHeader(routingPick));
 
+  // HermesFLLM phase routing: what the agent is doing now (editing, shell, exploring, web), read
+  // from its latest tool calls, so models are ranked by their tool success in that phase.
+  // A session sticks to its model for coherence, except when that model is markedly bad at this
+  // phase: then this one request routes on merit (lib/hermes-phase.ts, stickyBreak).
+  const agentPhase = pinnedModelId == null && groupChain == null && wantsTools && isPhaseRoutingEnabled() ? derivePhase(messages) : null;
+  if (agentPhase) {
+    const broke = preferredModel != null && breaksStickiness(preferredModel, agentPhase);
+    if (broke) preferredModel = undefined;
+    notePhase(agentPhase, broke);
+    if (!res.headersSent) res.setHeader('X-HermesFLLM-Phase', broke ? `${agentPhase}; sticky model set aside` : agentPhase);
+  }
+
   await runFallbackLoop({
     maxRetries: MAX_RETRIES,
     state,
@@ -2567,7 +2580,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
       // header; otherwise a bounded rule derives it (tools present / code
       // markers). undefined keeps the preset weights untouched.
       const taskType = resolveTaskType(req, tools, messages);
-      return routeRequest(routingEstimate, state.skipKeys.size > 0 ? state.skipKeys : undefined, preferredModel, hasImage, wantsTools, state.skipModels.size > 0 ? state.skipModels : undefined, groupChain ?? resolvedChain?.chain, samplingParams.response_format !== undefined, state.skipPlatforms.size > 0 ? state.skipPlatforms : undefined, outputReserve, taskType, resolvedChain?.strategyOverride);
+      return routeRequest(routingEstimate, state.skipKeys.size > 0 ? state.skipKeys : undefined, preferredModel, hasImage, wantsTools, state.skipModels.size > 0 ? state.skipModels : undefined, groupChain ?? resolvedChain?.chain, samplingParams.response_format !== undefined, state.skipPlatforms.size > 0 ? state.skipPlatforms : undefined, outputReserve, taskType, resolvedChain?.strategyOverride, agentPhase);
     },
     dispatch: async (route, attempt, ctx) => {
     const contextBudget = routeOutputBudget(route, estimatedInputTokens);
