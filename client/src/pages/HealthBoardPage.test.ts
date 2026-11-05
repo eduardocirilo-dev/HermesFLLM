@@ -74,3 +74,23 @@ describe('raceShares with a winner that failed', () => {
     expect(shares.reduce((sum, s) => sum + s.share, 0)).toBeCloseTo(1)
   })
 })
+
+import { formatTokens } from './HealthBoardPage'
+
+describe('context fit card', () => {
+  it('reads token counts at a glance', () => {
+    expect(formatTokens(950)).toBe('950')
+    expect(formatTokens(12_340)).toBe('12.3k')
+    expect(formatTokens(2_500_000)).toBe('2.5M')
+  })
+
+  it('has its strings, with their placeholders, in en, pt-PT and pt-BR', () => {
+    for (const dict of [en, ptPT, ptBR] as Array<{ healthBoard: Record<string, string> }>) {
+      expect(dict.healthBoard.fitTitle).toBeTruthy()
+      expect(dict.healthBoard.fitRegained).toContain('{since}')
+      expect(dict.healthBoard.fitSummary).toContain('{tokens}')
+      expect(dict.healthBoard.fitIdle).toContain('{turns}')
+      expect(dict.healthBoard.fitHow).toBeTruthy()
+    }
+  })
+})

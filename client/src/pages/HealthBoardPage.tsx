@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Brain, Clock, Flame, Hourglass, LifeBuoy, Radar, Repeat, ShieldCheck, Snowflake, Timer, Trophy, XCircle, Zap } from 'lucide-react'
+import { Activity, Brain, Clock, Flame, Hourglass, LifeBuoy, Radar, Repeat, ShieldCheck, Shrink, Snowflake, Timer, Trophy, XCircle, Zap } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
 import { BuildBadge } from '@/components/build-badge'
 import { Badge } from '@/components/ui/badge'
@@ -46,10 +46,14 @@ export interface HealthBoard {
     total24h: number
     total7d: number
   }
+  contextFit?: { enabled: boolean; turns: number; compacted: number; tokensSaved: number; modelsRegained: number; since: string }
   race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; winnerFailed?: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
   traffic: { requests24h: number; successRate24h: number | null }
   topModels: Array<{ platform: string; modelId: string; name: string; intelligenceRank: number | null; requests: number; successRate: number; avgLatencyMs: number | null; slow?: boolean }>
 }
+
+/** xl columns for the top row, by how many cards it holds. */
+const TOP_GRID: Record<number, string> = { 3: 'xl:grid-cols-3', 4: 'xl:grid-cols-4', 5: 'xl:grid-cols-3 2xl:grid-cols-5' }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 
@@ -119,6 +123,42 @@ function RaceCard({ race, now }: { race: NonNullable<HealthBoard['race']>; now: 
         <p className="text-xs text-muted-foreground">
           {t('healthBoard.raceDelay', { min: Math.round(race.minDelayMs / 1000), max: Math.round(race.maxDelayMs / 1000) })}
         </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** "12.3k" style token counts. */
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function ContextFitCard({ fit, now }: { fit: NonNullable<HealthBoard['contextFit']>; now: number }) {
+  const { t } = useI18n()
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Shrink className={cn('h-4 w-4', fit.enabled ? 'text-sky-500' : 'text-muted-foreground')} />
+          {t('healthBoard.fitTitle')}
+          <Badge variant={fit.enabled ? 'default' : 'secondary'} className="ml-auto">
+            {fit.enabled ? t('healthBoard.on') : t('healthBoard.off')}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p className="text-4xl font-semibold tabular-nums">{fit.modelsRegained}</p>
+        <p className="text-muted-foreground">{t('healthBoard.fitRegained', { since: formatAgo(fit.since, now) })}</p>
+        {fit.compacted > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {t('healthBoard.fitSummary', { compacted: fit.compacted, turns: fit.turns, tokens: formatTokens(fit.tokensSaved) })}
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('healthBoard.fitIdle', { turns: fit.turns })}</p>
+        )}
+        <p className="text-xs text-muted-foreground">{t('healthBoard.fitHow')}</p>
       </CardContent>
     </Card>
   )
@@ -197,7 +237,7 @@ export default function HealthBoardPage() {
         </div>
       ) : (
         <>
-          <div className={cn('grid gap-4 md:grid-cols-2', data.race ? 'xl:grid-cols-4' : 'xl:grid-cols-3')}>
+          <div className={cn('grid gap-4 md:grid-cols-2', TOP_GRID[3 + (data.race ? 1 : 0) + (data.contextFit ? 1 : 0)])}>
             <Card>
               <CardContent className="flex items-center gap-5 pt-6">
                 <PulseRing rate={data.traffic.successRate24h} label={t('healthBoard.success24h')} />
@@ -271,6 +311,7 @@ export default function HealthBoardPage() {
             </Card>
 
             {data.race && <RaceCard race={data.race} now={now} />}
+            {data.contextFit && <ContextFitCard fit={data.contextFit} now={now} />}
           </div>
 
 
