@@ -179,6 +179,23 @@ function excludedModelIds(now: number): number[] {
 }
 
 const urgentQueue = new Set<number>();
+
+// An inconclusive probe (busy provider, transport error) settles nothing, so it used to leave the
+// model in the urgent queue forever: four such models took every slot of every round for hours,
+// burned the daily cap and starved excluded/stale models of probes. Now an inconclusive result
+// parks the model for a while (no probe, no re-queue), and a second one in a row drops it from the
+// urgent queue; it comes back through the normal stale/excluded order.
+export const INCONCLUSIVE_BACKOFF_MS = positiveInt(process.env.HERMESFLLM_CURATION_INCONCLUSIVE_BACKOFF_MS, 30 * 60 * 1000);
+const MAX_URGENT_INCONCLUSIVE = 2;
+const inconclusiveUntil = new Map<number, number>();
+const urgentInconclusive = new Map<number, number>();
+
+function inBackoff(modelDbId: number, now: number): boolean {
+  const until = inconclusiveUntil.get(modelDbId);
+  if (until === undefined) return false;
+  if (now >= until) { inconclusiveUntil.delete(modelDbId); return false; }
+  return true;
+}
 const dailyProbes = new Map<string, { day: string; count: number }>();
 
 function dayOf(now: number): string {
@@ -244,6 +261,7 @@ export function selectCurationCandidates(limit = CURATION_MAX_PROBES, now = Date
   const seen = new Set<number>();
   const tryAdd = (modelDbId: number, reason: CurationReason, minAgeMs: number): void => {
     if (out.length >= limit || seen.has(modelDbId)) return;
+    if (inBackoff(modelDbId, now)) return;
     const c = candidateForModel(modelDbId);
     if (!c) return;
     seen.add(modelDbId);
@@ -402,8 +420,22 @@ export async function runCurationRound(deps: ModelProbeRequestDeps = {}, now = D
         outcome = { status: 'error', error: `inconclusive (provider busy): ${outcome.error}` };
       }
       recordProbeResult(getDb(), c, outcome);
-      // Answered or truly down: either way the urgent question is settled.
-      if (outcome.status !== 'error') urgentQueue.delete(c.modelDbId);
+      if (outcome.status !== 'error') {
+        // Answered or truly down: either way the urgent question is settled.
+        urgentQueue.delete(c.modelDbId);
+        urgentInconclusive.delete(c.modelDbId);
+        inconclusiveUntil.delete(c.modelDbId);
+      } else {
+        // Inconclusive: park it, and give up on the urgent probe after a second one in a row.
+        inconclusiveUntil.set(c.modelDbId, now + INCONCLUSIVE_BACKOFF_MS);
+        const tries = (urgentInconclusive.get(c.modelDbId) ?? 0) + 1;
+        if (tries >= MAX_URGENT_INCONCLUSIVE) {
+          urgentQueue.delete(c.modelDbId);
+          urgentInconclusive.delete(c.modelDbId);
+        } else {
+          urgentInconclusive.set(c.modelDbId, tries);
+        }
+      }
       results.push({ platform: c.platform, modelId: c.modelId, reason: c.reason, status: outcome.status, latencyMs: outcome.latencyMs });
     }
     resetCurationCache();
@@ -422,6 +454,8 @@ let urgentTimer: ReturnType<typeof setTimeout> | null = null;
 /** Called on a real-traffic failure: probe that model within seconds instead of next round. */
 export function noteLiveFailure(modelDbId: number): void {
   if (!cancel) return; // curation not running (tests, disabled)
+  // Just came back inconclusive: probing it again now would only spend quota on a busy provider.
+  if (inBackoff(modelDbId, Date.now())) return;
   urgentQueue.add(modelDbId);
   if (urgentTimer) return;
   urgentTimer = setTimeout(() => {
@@ -474,6 +508,8 @@ export function stopCuration(): void {
  */
 export function resetCurationState(opts: { restartOnly?: boolean } = {}): void {
   urgentQueue.clear();
+  inconclusiveUntil.clear();
+  urgentInconclusive.clear();
   dailyProbes.clear();
   probeCountsLoaded = false;
   if (!opts.restartOnly) {
