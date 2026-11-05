@@ -94,3 +94,14 @@ describe('context fit card', () => {
     }
   })
 })
+
+describe('session anchor card', () => {
+  it('has its strings, with their placeholders, in en, pt-PT and pt-BR', () => {
+    for (const dict of [en, ptPT, ptBR] as Array<{ healthBoard: Record<string, string> }>) {
+      expect(dict.healthBoard.anchorTitle).toBeTruthy()
+      expect(dict.healthBoard.anchorReturned).toContain('{since}')
+      for (const k of ['{sessions}', '{active}', '{escalated}', '{displaced}']) expect(dict.healthBoard.anchorSummary).toContain(k)
+      expect(dict.healthBoard.anchorHow).toBeTruthy()
+    }
+  })
+})
