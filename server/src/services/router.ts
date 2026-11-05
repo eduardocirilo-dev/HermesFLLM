@@ -31,6 +31,7 @@ import {
 import { TIMEOUT_ERROR_MARKERS, isProviderMomentFailure } from '../lib/error-classify.js';
 import { checkMonthlyBudget, reserveMonthlyBudget } from './key-budget.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
+import { demotionFactor } from '../lib/hermes-demotions.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
 import { parseBudget } from '../lib/budget.js';
 import { platformDropsResponseFormat } from '../lib/sampling-params.js';
@@ -1152,10 +1153,11 @@ function scoreChainEntry(
   // Per-model env overrides (#738) scale the final score so a slow or
   // poor-quality model is demoted without being disabled outright — a manual
   // 'priority' chain can still select it.
+  // HermesFLLM: a demotion set from the health board multiplies the score the same way.
   const score = applyModelWeightOverride(
     combineScore({ reliability, speed, intelligence, headroom, rateLimit: rl }, weights),
     entry.model_id,
-  );
+  ) * demotionFactor(entry.model_id);
   return { axes: { reliability, speed, intelligence }, headroom, rateLimit: rl, score };
 }
 
