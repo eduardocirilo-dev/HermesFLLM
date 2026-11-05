@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Brain, Clock, Flame, Hourglass, LifeBuoy, Radar, Repeat, Scale, ShieldCheck, Snowflake, Timer, Trophy, XCircle, Zap } from 'lucide-react'
+import { Activity, Brain, Clock, Flame, Hourglass, LifeBuoy, Radar, Repeat, ShieldCheck, Snowflake, Timer, Trophy, XCircle, Zap } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
 import { BuildBadge } from '@/components/build-badge'
 import { Badge } from '@/components/ui/badge'
@@ -47,32 +47,11 @@ export interface HealthBoard {
     total7d: number
   }
   race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; winnerFailed?: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
-  shadow?: {
-    enabled: boolean
-    sampleRate: number | null
-    days: number
-    pairs: number
-    minPairs: number
-    pending: number
-    unreachable: number
-    hermes: { validToolCallRate: number | null; noAnswerRate: number | null; ttfb: Ttfb; ttfbRaced: Ttfb; ttfbNotRaced: Ttfb }
-    freellmapi: { validToolCallRate: number | null; noAnswerRate: number | null; ttfb: Ttfb }
-    winners: Record<'validToolCall' | 'ttfbP50' | 'ttfbP90' | 'noAnswer', ShadowWinner>
-  }
   traffic: { requests24h: number; successRate24h: number | null }
   topModels: Array<{ platform: string; modelId: string; name: string; intelligenceRank: number | null; requests: number; successRate: number; avgLatencyMs: number | null; slow?: boolean }>
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
-
-export interface Ttfb { p50: number | null; p90: number | null; n: number }
-export type ShadowWinner = 'hermes' | 'freellmapi' | 'tie' | null
-
-/** "1.2s / 3.4s" (p50 / p90), or a dash when that slice has no turns. */
-export function formatTtfb(t: Ttfb): string {
-  if (t.n === 0 || t.p50 === null || t.p90 === null) return '—'
-  return `${(t.p50 / 1000).toFixed(1)}s / ${(t.p90 / 1000).toFixed(1)}s`
-}
 
 /** Green at ≥95%, amber at ≥80%, red below: the same thresholds an operator reads at a glance. */
 export function healthTone(rate: number | null): 'good' | 'warn' | 'bad' | 'none' {
@@ -104,68 +83,6 @@ export function raceShares(race: { races: number; backupWins: number; primaryWin
     { key: 'winner', share: (race.winnerFailed ?? 0) / race.races, className: 'bg-amber-500' },
     { key: 'both', share: race.bothFailed / race.races, className: 'bg-red-500' },
   ].filter(s => s.share > 0)
-}
-
-function ShadowCard({ shadow }: { shadow: NonNullable<HealthBoard['shadow']> }) {
-  const { t } = useI18n()
-  const rate = (v: number | null) => (v === null ? '—' : pct(v))
-  const ttfbBoth = (h: Ttfb, f: Ttfb) => ({ h: formatTtfb(h), f: formatTtfb(f) })
-  const rows: Array<{ label: string; hint: string; h: string; f: string; win: ShadowWinner }> = [
-    { label: t('healthBoard.shadowValidCall'), hint: t('healthBoard.shadowHigherBetter'), h: rate(shadow.hermes.validToolCallRate), f: rate(shadow.freellmapi.validToolCallRate), win: shadow.winners.validToolCall },
-    { label: t('healthBoard.shadowTtfb'), hint: t('healthBoard.shadowLowerBetter'), ...ttfbBoth(shadow.hermes.ttfb, shadow.freellmapi.ttfb), win: shadow.winners.ttfbP90 },
-    { label: t('healthBoard.shadowNoAnswer'), hint: t('healthBoard.shadowLowerBetter'), h: rate(shadow.hermes.noAnswerRate), f: rate(shadow.freellmapi.noAnswerRate), win: shadow.winners.noAnswer },
-  ]
-  const verdictKey = shadow.pairs < shadow.minPairs ? null : rows.filter(r => r.win === 'hermes').length
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Scale className={cn('h-4 w-4', shadow.enabled ? 'text-sky-500' : 'text-muted-foreground')} />
-          {t('healthBoard.shadowTitle')}
-          <Badge variant={shadow.enabled ? 'default' : 'secondary'} className="ml-auto">
-            {shadow.enabled && shadow.sampleRate !== null
-              ? t('healthBoard.shadowSampling', { rate: pct(shadow.sampleRate) })
-              : t('healthBoard.off')}
-          </Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        {shadow.pairs === 0 ? (
-          <p className="text-muted-foreground">
-            {shadow.enabled ? t('healthBoard.shadowWaiting') : t('healthBoard.shadowOffHint')}
-          </p>
-        ) : (
-          <>
-            <div className="grid grid-cols-[1fr_auto_auto] gap-x-6 gap-y-1.5">
-              <span />
-              <span className="text-right text-xs font-medium">HermesFLLM</span>
-              <span className="text-right text-xs font-medium">FreeLLMAPI</span>
-              {rows.map(r => (
-                <Fragment key={r.label}>
-                  <span className="text-muted-foreground">{r.label} <span className="text-xs">({r.hint})</span></span>
-                  <span className={cn('text-right tabular-nums', r.win === 'hermes' && 'font-semibold text-emerald-600')}>{r.h}</span>
-                  <span className={cn('text-right tabular-nums', r.win === 'freellmapi' && 'font-semibold text-emerald-600')}>{r.f}</span>
-                </Fragment>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t('healthBoard.shadowRaceSplit', { raced: formatTtfb(shadow.hermes.ttfbRaced), racedN: shadow.hermes.ttfbRaced.n, notRaced: formatTtfb(shadow.hermes.ttfbNotRaced), notRacedN: shadow.hermes.ttfbNotRaced.n })}
-            </p>
-            <p className="text-xs font-medium">
-              {verdictKey === null
-                ? t('healthBoard.shadowTooFew', { pairs: shadow.pairs, min: shadow.minPairs })
-                : t('healthBoard.shadowVerdict', { wins: verdictKey, total: rows.length, pairs: shadow.pairs, days: shadow.days })}
-            </p>
-          </>
-        )}
-        {(shadow.pending > 0 || shadow.unreachable > 0) && (
-          <p className="text-xs text-muted-foreground">
-            {t('healthBoard.shadowExcluded', { pending: shadow.pending, unreachable: shadow.unreachable })}
-          </p>
-        )}
-      </CardContent>
-    </Card>
-  )
 }
 
 function RaceCard({ race, now }: { race: NonNullable<HealthBoard['race']>; now: number }) {
@@ -356,7 +273,6 @@ export default function HealthBoardPage() {
             {data.race && <RaceCard race={data.race} now={now} />}
           </div>
 
-          {data.shadow && <ShadowCard shadow={data.shadow} />}
 
           <AgentQualityCard />
 
