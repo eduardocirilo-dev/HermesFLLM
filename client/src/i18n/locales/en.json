@@ -1396,7 +1396,17 @@
     "causeGuard": "Broken tool call",
     "causeDeadline": "Silent at start",
     "causeRateLimit": "Rate limit",
-    "causeOther": "Other errors"
+    "causeOther": "Other errors",
+    "qualityTitle": "How your tasks go, by model",
+    "qualityDescription": "What Hermes did with each model's answers in the last 7 days: the tool calls that actually ran, and the turns that finished. Reported by the Hermes plugin (names and outcomes only).",
+    "qualityEvents": "{count} events",
+    "qualityEmpty": "No reports yet. Update the Hermes plugin to 0.3 and make sure HERMESFLLM_API_KEY is set where Hermes runs.",
+    "qualityGathering": "Reports are arriving; a model needs 5 tool calls or turns before it is rated.",
+    "qualityTools": "Tool calls that ran",
+    "qualityToolsDetail": "{ok} of {total}",
+    "qualityTurns": "Turns finished",
+    "qualityTurnsDetail": "{done} of {total}",
+    "qualityTopError": "Most frequent tool error: {error}"
   },
   "build": {
     "updated": "updated"

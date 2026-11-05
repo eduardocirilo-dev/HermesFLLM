@@ -38,6 +38,7 @@ import { updateRouter } from './routes/update.js';
 import { moderationRouter } from './routes/moderation.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { curationRouter } from './routes/curation.js';
+import { feedbackRouter } from './routes/feedback.js';
 import { HERMESFLLM_BUILD } from './lib/hermes-build.js';
 import { createHostGuard } from './middleware/allowed-hosts.js';
 import { createProxyRateLimiter, createAdminRateLimiter } from './middleware/rateLimit.js';
@@ -307,6 +308,10 @@ export function createApp(config?: Config) {
   // limiter (like docsRouter) so status polling doesn't draw down a caller's
   // request budget.
   app.use('/v1', providersRouter);
+
+  // HermesFLLM: the Hermes plugin's tool and turn outcomes (lib/hermes-feedback.ts). Before the rate
+  // limiter, like the status routes: it carries no inference and must not eat the agent's budget.
+  app.use('/v1/hermesfllm', feedbackRouter);
 
   // Separately revocable URL tokens for clients that cannot set headers.
   app.use('/v1/t/:token', createProxyRateLimiter(cfg.proxyRateLimitRpm));

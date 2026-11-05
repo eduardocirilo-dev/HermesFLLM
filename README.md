@@ -23,6 +23,7 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
 | **Knowing which models work** | Proactive probe is off by default and observation-only (routing never reads it); probes ask "Reply with OK" | **Continuous agent-grade curation**: every 10 min, up to 4 probes, each a short agent task: two tools are needed (weather and local time), every call is validated by the Agent Guard, and the final answer must contain the values the tools returned (which the model cannot guess). Models that call one tool and stop, or answer from imagination, fail. A model that fails is excluded until it passes again (verdicts last 1h); exclusion fails open, so if every other model is unavailable an excluded one is still tried instead of refusing the turn. Busy providers (429/5xx) count as inconclusive, not as broken |
 | **Reacting to failures** | Penalties and cooldowns after real failures | Same, plus a real-traffic failure triggers a probe of that model within ~30s |
 | **Failover target** | Next model in the chain | A **warm reserve**: the most reliable recent models are probed most often, so failover lands on a model already proven to answer |
+| **Knowing what works for your tasks** | Only whether a model answered | **Agent feedback** from the Hermes plugin: for each model, the share of its tool calls that actually ran and of its turns that finished, from Hermes' own hooks (model ids, tool names and outcomes only; never arguments, results or messages). Shown on the health board; the signal for quality-based routing |
 | **Visibility** | Analytics and logs | **Model health board** (top bar): where the agent loses time (seconds lost per model on failed attempts, split by cause, with a one-click *Lower priority* that applies on the next request without a restart), live 24h success gauge, rescued turns by kind (Agent Guard, deadline, stall, loop, ceiling), first-token race wins, live curation, warm reserve, routing policy, excluded models with the reason |
 | **Model id** | `auto` | `autoTOP-hermes` (routes like `auto` under the agent policy; `auto` still works) |
 | **Running beside the agent** | Docker / desktop app | macOS **launchd** service (`scripts/launchd/install.sh`), build stamp (version, commit, build time) on every page and at `GET /api/hermesfllm/version` |
@@ -71,7 +72,7 @@ stores your provider keys.
 ### Use it from Hermes
 
 Point a Hermes provider at `http://127.0.0.1:3002/v1` with your unified key and model
-`autoTOP-hermes`, or run `scripts/hermes-setup.sh` to see the suggested changes. The plugin's
+`autoTOP-hermes`, or run `scripts/hermes-setup.sh` to see the suggested changes. Plugin 0.3 also reports what Hermes did with each answer (see *Agent feedback* above); it uses the same `HERMESFLLM_API_KEY` Hermes uses for the provider, so that variable must be visible to the Hermes process. `hermesfllm_status` shows whether reports are getting through, and `HERMESFLLM_FEEDBACK=0` turns them off. The plugin's
 `hermesfllm_status` checks `http://127.0.0.1:3002` and confirms the server is HermesFLLM (not a
 FreeLLMAPI on another port); set `HERMESFLLM_URL` in Hermes' environment if you chose another port. Give Hermes a
 fallback with a model the fallback provider actually has, so a HermesFLLM outage never sends

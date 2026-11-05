@@ -52,6 +52,7 @@ const REQUEST_FAILURE_ATTRIBUTION_FILENAME = '20261017_233153_request_failure_at
 const REMOVE_AURAY_PROVIDER_FILENAME = '20261019_000001_remove_auray_provider.ts';
 const KEY_LAST_HEALTHY_AT_FILENAME = '20261020_000001_key_last_healthy_at.ts';
 const HERMES_SHADOW_PAIRS_FILENAME = '20261103_000001_hermes_shadow_pairs.ts';
+const HERMES_FEEDBACK_FILENAME = '20261105_000001_hermes_feedback.ts';
 
 interface SchemaRow {
   type: string;
@@ -150,6 +151,7 @@ describe('migration round trip', () => {
         REMOVE_AURAY_PROVIDER_FILENAME,
         KEY_LAST_HEALTHY_AT_FILENAME,
         HERMES_SHADOW_PAIRS_FILENAME,
+        HERMES_FEEDBACK_FILENAME,
       ]);
     } finally {
       db.close();

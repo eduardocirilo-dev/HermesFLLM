@@ -10,6 +10,7 @@ import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { ModelForensicsCard } from '@/components/model-forensics-card'
+import { AgentQualityCard } from '@/components/agent-quality-card'
 
 export type RescueKind = 'guard' | 'deadline' | 'stall' | 'runaway' | 'ceiling'
 
@@ -356,6 +357,8 @@ export default function HealthBoardPage() {
           </div>
 
           {data.shadow && <ShadowCard shadow={data.shadow} />}
+
+          <AgentQualityCard />
 
           <ModelForensicsCard />
 

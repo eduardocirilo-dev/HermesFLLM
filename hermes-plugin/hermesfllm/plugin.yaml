@@ -1,12 +1,17 @@
 name: hermesfllm
 label: HermesFLLM
 kind: standalone
-version: 0.2.1
+version: 0.3.0
 author: eduardocirilo-dev
 description: >
-  Status and stop tools for the HermesFLLM router (a FreeLLMAPI fork). The server is kept
-  running by a launchd agent, so it is up before Hermes probes /v1/models.
+  Status and stop tools for the HermesFLLM router (a FreeLLMAPI fork), and agent feedback: which
+  model served each call, whether its tool calls ran, how each turn ended (names and outcomes
+  only), so the router can learn task quality. HERMESFLLM_FEEDBACK=0 turns the feedback off.
 requires_hermes: ">=0.22.0"
 provides_tools:
   - hermesfllm_status
   - hermesfllm_stop
+provides_hooks:
+  - post_api_request
+  - post_tool_call
+  - on_session_end
