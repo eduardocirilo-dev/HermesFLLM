@@ -21,7 +21,7 @@ import {
   BANDIT_PRESETS, DEFAULT_STRATEGY, type PresetStrategy, type RoutingStrategy, type RoutingWeights,
   type KeySelectionStrategy,
   reliabilityPosterior, expectedReliability, sampleBeta,
-  speedScore, intelligenceScore, intelligenceComposite, headroomFactor, rateWindowHeadroomFactor,
+  speedScore, intelligenceScore, intelligenceComposite, tierValue, headroomFactor, rateWindowHeadroomFactor,
   rateLimitFactor, combineScore,
   peakAdjustedWeights, taskAdjustedWeights, TASK_WEIGHT_SHARE, isValidPeakHour, isValidTimezone,
   DEFAULT_PEAK_HOURS, type PeakHoursConfig,
@@ -1206,7 +1206,7 @@ export function applyReliabilityFloor(chain: ChainRow[]): ChainRow[] {
  * faithful reflection of the user's picked strategy, not a re-sampled draw each
  * request. Priority mode is deterministic either way.
  */
-function orderChain(chain: ChainRow[], strategy: RoutingStrategy, sampled = true, task?: 'code' | 'chat', phase?: AgentPhase | null): ChainRow[] {
+function orderChain(chain: ChainRow[], strategy: RoutingStrategy, sampled = true, task?: 'code' | 'chat', phase?: AgentPhase | null, minTier?: number | null): ChainRow[] {
   // Tier first, always: it is the one ordering input that score must not be able
   // to override (see ChainRow.match_tier). Zero for every chain built anywhere
   // else, so this is a no-op outside slug-fallback resolution.
@@ -1273,7 +1273,10 @@ function orderChain(chain: ChainRow[], strategy: RoutingStrategy, sampled = true
     .map(e => ({ e, s: scoreChainEntry(e, weights, intelMin, intelMax, sampled, keyCounts, headroomCfg).score * phaseFactor(e.model_id, phase) }))
     // Higher score first WITHIN a tier; manual priority breaks ties so the chain
     // still matters.
-    .sort((a, b) => tier(a.e) - tier(b.e) || b.s - a.s || a.e.priority - b.e.priority)
+    // HermesFLLM session anchor: models at the session's size tier or above first, so a failover
+    // escalates or stays level; weaker ones only after them (lib/hermes-session.ts).
+    .map(x => ({ ...x, below: minTier != null && tierValue(x.e.size_label) < minTier ? 1 : 0 }))
+    .sort((a, b) => tier(a.e) - tier(b.e) || a.below - b.below || b.s - a.s || a.e.priority - b.e.priority)
     .map(x => x.e);
 }
 
@@ -2189,7 +2192,7 @@ export function resolveFusionCandidate(modelId: string): FusionCandidate | null 
  *   global one. Set by the `auto:<axis>` aliases (ResolvedChain.strategyOverride,
  *   #1628); leave unset everywhere else.
  */
-export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat', strategyOverride?: PresetStrategy, phase?: AgentPhase | null): RouteResult {
+export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat', strategyOverride?: PresetStrategy, phase?: AgentPhase | null, minTier?: number | null): RouteResult {
   const db = getDb();
 
   // The alias's axis wins for this request (#1628): scoring the prefetched
@@ -2202,7 +2205,7 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
 
   const chain = (prefetchedChain ?? getActiveChain(db)).filter(e => e.enabled);
 
-  const sortedChain = orderChain(chain, strategy, true, task, phase);
+  const sortedChain = orderChain(chain, strategy, true, task, phase, minTier);
 
   // Exploration toggle (#685/#707 follow-up): when enabled, give a model with
   // no reliability/speed samples a guaranteed chance to be tried, so it stops

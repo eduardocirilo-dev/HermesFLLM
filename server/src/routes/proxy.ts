@@ -2,6 +2,7 @@ import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME, attemp
 import { governorConfig, TurnGovernor } from '../lib/hermes-governor.js';
 import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
 import { fitContext } from '../lib/hermes-context-fit.js';
+import { isSessionAnchorEnabled, noteSessionModel, sessionAnchor } from '../lib/hermes-session.js';
 import { breaksStickiness, derivePhase, isPhaseRoutingEnabled, notePhase } from '../lib/hermes-phase.js';
 import crypto from 'crypto';
 import { Router } from 'express';
@@ -2440,6 +2441,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   // buckets by the canonical id the client sent, so the group prefers its last
   // successful provider without leaking stickiness across groups.
   let stickyStrategyKey: string | undefined = strategyKey;
+  // HermesFLLM session anchor: the session key ('' when not anchored) and the minimum size tier.
+  let anchorKey = '';
+  let sessionMinTier: number | null = null;
 
   if (aliasTierChain.length > 0) {
     // A tier-mapped Claude alias routes STRICTLY over its tier's pool. An
@@ -2450,6 +2454,18 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     preferredModel = (sticky != null && groupChain.some(r => r.model_db_id === sticky)) ? sticky : undefined;
   } else if (isAutoModel(requestedModel)) {
     preferredModel = resolveStickyPreference(getStickyModel(messages, sessionIdHeader, strategyKey), resolvedChain?.chain);
+    // HermesFLLM session anchor (agent turns): back to the session's strongest model after a
+    // failover to a weaker one, and failovers try its size tier or above first.
+    if (wantsTools && isSessionAnchorEnabled()) {
+      anchorKey = getSessionKey(messages, sessionIdHeader, strategyKey);
+      const anchor = sessionAnchor(anchorKey);
+      if (anchor) {
+        sessionMinTier = anchor.tier;
+        const back = resolveStickyPreference(anchor.modelDbId, resolvedChain?.chain);
+        if (back != null) preferredModel = back;
+        if (!res.headersSent) res.setHeader('X-HermesFLLM-Session-Anchor', safeHeaderValue(anchor.displaced ? `${anchor.modelId}; returning` : anchor.modelId));
+      }
+    }
   } else if (requestedModel) {
     const db = getDb();
     // Unify ON: a requested id (canonical slug OR any provider's model_id) maps
@@ -2580,7 +2596,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
       // header; otherwise a bounded rule derives it (tools present / code
       // markers). undefined keeps the preset weights untouched.
       const taskType = resolveTaskType(req, tools, messages);
-      return routeRequest(routingEstimate, state.skipKeys.size > 0 ? state.skipKeys : undefined, preferredModel, hasImage, wantsTools, state.skipModels.size > 0 ? state.skipModels : undefined, groupChain ?? resolvedChain?.chain, samplingParams.response_format !== undefined, state.skipPlatforms.size > 0 ? state.skipPlatforms : undefined, outputReserve, taskType, resolvedChain?.strategyOverride, agentPhase);
+      return routeRequest(routingEstimate, state.skipKeys.size > 0 ? state.skipKeys : undefined, preferredModel, hasImage, wantsTools, state.skipModels.size > 0 ? state.skipModels : undefined, groupChain ?? resolvedChain?.chain, samplingParams.response_format !== undefined, state.skipPlatforms.size > 0 ? state.skipPlatforms : undefined, outputReserve, taskType, resolvedChain?.strategyOverride, agentPhase, sessionMinTier);
     },
     dispatch: async (route, attempt, ctx) => {
     const contextBudget = routeOutputBudget(route, estimatedInputTokens);
@@ -3129,7 +3145,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           }
 
           // A race backup answers this turn only; the session keeps its own (stronger) model.
-          if (!ctx.raceBackup) setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
+          if (!ctx.raceBackup) {
+            setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
+            if (anchorKey) noteSessionModel(anchorKey, route.modelDbId);
+          }
           if (handoffMode !== 'off' && sessionKey) recordSuccessfulModel({ sessionKey, modelKey });
           // #797: remember this turn's thinking trace so the next request from
           // the same session can restore it (clients strip it on replay).
@@ -3356,7 +3375,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
         // streaming success path; without it, "prefer last successful provider"
         // is lost for non-streaming group-pinned sessions. (#341 review)
         // A race backup answers this turn only; the session keeps its own (stronger) model.
-        if (!ctx.raceBackup) setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
+        if (!ctx.raceBackup) {
+          setStickyModel(messages, route.modelDbId, sessionIdHeader, stickyStrategyKey);
+          if (anchorKey) noteSessionModel(anchorKey, route.modelDbId);
+        }
         if (handoffMode !== 'off' && sessionKey) recordSuccessfulModel({ sessionKey, modelKey });
 
         res.setHeader('X-Routed-Via', routedViaValue(route.platform, route.modelId));
