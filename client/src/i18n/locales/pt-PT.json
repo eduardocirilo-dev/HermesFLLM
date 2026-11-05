@@ -1396,7 +1396,17 @@
     "causeGuard": "Tool call estragada",
     "causeDeadline": "Calado no arranque",
     "causeRateLimit": "Limite de pedidos",
-    "causeOther": "Outros erros"
+    "causeOther": "Outros erros",
+    "qualityTitle": "Como correm as tuas tarefas, por modelo",
+    "qualityDescription": "O que o Hermes fez com as respostas de cada modelo nos últimos 7 dias: as tool calls que correram de facto e os turnos que terminaram. Enviado pelo plugin do Hermes (só nomes e resultados).",
+    "qualityEvents": "{count} eventos",
+    "qualityEmpty": "Ainda sem dados. Atualiza o plugin do Hermes para a 0.3 e confirma que a HERMESFLLM_API_KEY está definida onde o Hermes corre.",
+    "qualityGathering": "Os dados estão a chegar; um modelo precisa de 5 tool calls ou turnos para ser avaliado.",
+    "qualityTools": "Tool calls que correram",
+    "qualityToolsDetail": "{ok} de {total}",
+    "qualityTurns": "Turnos terminados",
+    "qualityTurnsDetail": "{done} de {total}",
+    "qualityTopError": "Erro de ferramenta mais frequente: {error}"
   },
   "build": {
     "updated": "atualizado"

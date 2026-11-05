@@ -47,6 +47,7 @@ import * as requestFailureAttribution from '../migrations/20261017_233153_reques
 import * as removeAurayProvider from '../migrations/20261019_000001_remove_auray_provider.js';
 import * as keyLastHealthyAt from '../migrations/20261020_000001_key_last_healthy_at.js';
 import * as hermesShadowPairs from '../migrations/20261103_000001_hermes_shadow_pairs.js';
+import * as hermesFeedback from '../migrations/20261105_000001_hermes_feedback.js';
 
 export interface MigrationModule {
   up(db: Db): void;
@@ -106,6 +107,7 @@ export const REQUEST_FAILURE_ATTRIBUTION_FILENAME = '20261017_233153_request_fai
 export const REMOVE_AURAY_PROVIDER_FILENAME = '20261019_000001_remove_auray_provider.ts';
 export const KEY_LAST_HEALTHY_AT_FILENAME = '20261020_000001_key_last_healthy_at.ts';
 export const HERMES_SHADOW_PAIRS_FILENAME = '20261103_000001_hermes_shadow_pairs.ts';
+export const HERMES_FEEDBACK_FILENAME = '20261105_000001_hermes_feedback.ts';
 
 export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: LEGACY_BASELINE_FILENAME, module: legacyBaseline },
@@ -156,4 +158,5 @@ export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: REMOVE_AURAY_PROVIDER_FILENAME, module: removeAurayProvider },
   { filename: KEY_LAST_HEALTHY_AT_FILENAME, module: keyLastHealthyAt },
   { filename: HERMES_SHADOW_PAIRS_FILENAME, module: hermesShadowPairs },
+  { filename: HERMES_FEEDBACK_FILENAME, module: hermesFeedback },
 ];

@@ -8,6 +8,7 @@ import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js
 import { governorConfig } from '../lib/hermes-governor.js';
 import { shadowStats } from '../lib/hermes-shadow.js';
 import { DEFAULT_DEMOTION_FACTOR, getDemotions, setDemotion } from '../lib/hermes-demotions.js';
+import { qualityByModel } from '../lib/hermes-feedback.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
 // excluded and why, and how many broken agent turns the Agent Guard caught.
@@ -252,4 +253,9 @@ curationRouter.put('/demotions', (req: Request, res: Response) => {
   const next = setDemotion(modelId, demote ? DEFAULT_DEMOTION_FACTOR : null);
   console.log(`[Demotions] ${modelId} ${demote ? `demoted to x${DEFAULT_DEMOTION_FACTOR}` : 'restored'} from the dashboard`);
   res.json({ demotions: Object.fromEntries(next) });
+});
+
+// What the agent did with each model's answers, as reported by the Hermes plugin (7 days).
+curationRouter.get('/quality', (_req: Request, res: Response) => {
+  res.json(qualityByModel(7));
 });
