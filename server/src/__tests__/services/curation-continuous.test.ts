@@ -127,6 +127,38 @@ describe('runCurationRound', () => {
     expect(curationStatus().urgentQueued).toBe(0);
   });
 
+  // Regression (production log, 4-5 Nov): four models whose probes kept coming back inconclusive
+  // (provider busy) stayed in the urgent queue for hours, took all four slots of every round and
+  // burned the daily cap, while excluded and stale models went unprobed and every exclusion expired.
+  it('models whose probes stay inconclusive cannot hold the urgent queue', async () => {
+    markCurationRunningForTest(true);
+    const stuck = ['m1', 'm2', 'm3', 'm4'];
+    for (const id of [1, 2, 3, 4]) noteLiveFailure(id);
+    const busy = async (c: { modelId: string }) => { if (stuck.includes(c.modelId)) throw new Error('API error 503: high demand'); };
+
+    let now = Date.now();
+    const probed: string[] = [];
+    for (let round = 0; round < 6; round++) { // one hour of 10-minute rounds
+      const r = await runCurationRound({ chat: busy }, now);
+      probed.push(...(r?.results ?? []).map(x => x.modelId));
+      now += 10 * 60 * 1000;
+    }
+
+    for (const m of stuck) expect(probed.filter(x => x === m).length, m).toBeLessThanOrEqual(2);
+    expect(probed.some(x => !stuck.includes(x))).toBe(true); // the rest of the pool gets its turn
+    expect(curationStatus(now).urgentQueued).toBe(0);
+  });
+
+  it('a live failure on a model in inconclusive backoff does not re-queue it at once', async () => {
+    markCurationRunningForTest(true);
+    noteLiveFailure(1);
+    const now = Date.now();
+    await runCurationRound({ chat: async c => { if (c.modelId === 'm1') throw new Error('API error 503: high demand'); } }, now);
+    noteLiveFailure(1); // traffic keeps failing on it
+    const next = selectCurationCandidates(4, now + 10 * 60 * 1000).map(c => c.modelId);
+    expect(next).not.toContain('m1');
+  });
+
   it('ignores live failures while curation is not running', () => {
     noteLiveFailure(2);
     expect(curationStatus().urgentQueued).toBe(0);

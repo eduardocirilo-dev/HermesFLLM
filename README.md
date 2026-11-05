@@ -101,6 +101,7 @@ fallback with a model the fallback provider actually has, so a HermesFLLM outage
 | `HERMESFLLM_CURATION_DAILY_CAP` | 60 | probes per provider per day |
 | `HERMESFLLM_CURATION_VERDICT_TTL_MS` | 3600000 | how long an exclusion lasts |
 | `HERMESFLLM_CURATION_ENABLED` | on | `0` disables curation |
+| `HERMESFLLM_CURATION_INCONCLUSIVE_BACKOFF_MS` | 1800000 | after an inconclusive probe (busy provider), how long a model is left alone; a second one in a row drops it from the urgent queue |
 
 ### Manage the service
 
