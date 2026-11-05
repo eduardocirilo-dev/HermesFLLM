@@ -1,6 +1,7 @@
 import { isHermesAutoModel, HERMES_AUTO_MODEL_ID, HERMES_AUTO_MODEL_NAME, attemptDeadlineMs, agentDeadlineError } from '../lib/hermes-auto.js';
 import { governorConfig, TurnGovernor } from '../lib/hermes-governor.js';
 import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
+import { fitContext } from '../lib/hermes-context-fit.js';
 import crypto from 'crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -43,6 +44,7 @@ import { isUnifyEnabled, getModelGroups, resolveRequestedIdForDispatch } from '.
 import { buildModelListing, servableContextWindow, type NormalizedModel } from '../services/model-listing.js';
 import { claudeFamilyDiscoveryEntries, resolveListedClaudeAlias } from '../services/anthropic-map.js';
 import { compressRequest, formatCompressionHeader } from '../services/compression/pipeline.js';
+import { parseCompressionDirective } from '../services/compression/config.js';
 import { applyDecisionRouting, routingStrategyHeader } from '../services/routing-decision.js';
 import { startStreamKeepalive, streamKeepaliveMs } from '../lib/stream-keepalive.js';
 
@@ -2022,6 +2024,18 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   });
   messages = compressionResult.messages;
   res.setHeader('X-FreeLLM-Compress', formatCompressionHeader(compressionResult));
+
+  // HermesFLLM context fit: when the caller did not compress and the prompt is too big for the
+  // top-ranked models, compact it (lossless and 'standard' engines only) down to what the best
+  // excluded model accepts. A no-op for short prompts, pinned models and an explicit
+  // `x-freellm-compress: off` (lib/hermes-context-fit.ts).
+  if (compressionResult.mode === 'off' && parseCompressionDirective(req.headers['x-freellm-compress']) !== 'off' && isAutoModel(requestedModel)) {
+    const fit = fitContext(messages, { tools, outputReserve: routingReserveTokens(max_tokens), cacheControlPrefixLength });
+    if (fit.applied) {
+      messages = fit.messages;
+      res.setHeader('X-HermesFLLM-Context-Fit', `${fit.tokensBefore}->${fit.tokensAfter} tokens; eligible ${fit.eligibleBefore}->${fit.eligibleAfter}; for ${safeHeaderValue(fit.forModel ?? '')}`);
+    }
+  }
 
   // Server-enforced system prompt (#411): injected AFTER compression so it is
   // never compressed away, and FIRST in the list so a caller-supplied system

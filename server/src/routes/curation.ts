@@ -5,6 +5,7 @@ import { getCustomWeights, getMinReliabilityFloor, getRoutingStrategy } from '..
 import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PROBES, CURATION_VERDICT_TTL_MS, MAX_LATENCY_MS, curationStatus, reserveModelIds, slowModelIds } from '../services/curation.js';
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
+import { contextFitStats } from '../lib/hermes-context-fit.js';
 import { governorConfig } from '../lib/hermes-governor.js';
 import { DEFAULT_DEMOTION_FACTOR, getDemotions, setDemotion } from '../lib/hermes-demotions.js';
 import { qualityByModel } from '../lib/hermes-feedback.js';
@@ -146,6 +147,7 @@ export function buildHealthBoard(now = Date.now()) {
       total24h,
       total7d,
     },
+    contextFit: contextFitStats(),
     race: (() => {
       const { min, max } = raceDelayBounds();
       return { enabled: isRaceEnabled(), ...raceStats(), minDelayMs: min, maxDelayMs: max };
