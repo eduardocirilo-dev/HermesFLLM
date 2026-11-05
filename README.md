@@ -27,15 +27,11 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
 | **Visibility** | Analytics and logs | **Model health board** (top bar): where the agent loses time (seconds lost per model on failed attempts, split by cause, with a one-click *Lower priority* that applies on the next request without a restart), live 24h success gauge, rescued turns by kind (Agent Guard, deadline, stall, loop, ceiling), first-token race wins, live curation, warm reserve, routing policy, excluded models with the reason |
 | **Model id** | `auto` | `autoTOP-hermes` (routes like `auto` under the agent policy; `auto` still works) |
 | **Running beside the agent** | Docker / desktop app | macOS **launchd** service (`scripts/launchd/install.sh`), build stamp (version, commit, build time) on every page and at `GET /api/hermesfllm/version` |
-| **Is it actually better?** | No way to check against the alternative on your own traffic | **Shadow comparison** (opt-in, `HERMESFLLM_SHADOW=1`): an invisible copy of 1 in 10 agent turns goes to FreeLLMAPI in parallel. The agent only gets the HermesFLLM answer; both are judged by the same three metrics on the health board: turns ending with a tool call the agent can run, first token p50/p90 (HermesFLLM split by turns with and without the first-token race), and turns with no answer (error, timeout or empty). No verdict below 30 identical turns. Only outcomes and timings are stored, never content |
 
 ## Honest limits
 
-- **Not proven yet with numbers.** The mechanisms above target the failures we observed with Hermes,
-  but a side-by-side measurement against FreeLLMAPI has not been published. The shadow comparison
-  measures it on your own traffic; it spends double free quota on the sampled turns, needs
-  FreeLLMAPI running, and both sides draw on the same provider quotas, so a busy provider can hurt
-  whichever side asks second.
+- **Quality is measured, not yet acted on.** The Hermes plugin reports which tool calls ran and which
+  turns finished, per model (health board); routing does not use that signal yet.
 - **The model catalog still comes from FreeLLMAPI.** Without a FreeLLMAPI Premium key, an install
   gets the monthly catalog snapshot. An open HermesFLLM catalog is planned.
 - **Probes spend free quota.** Up to 4 probes every 10 minutes (each up to 3 requests), capped at 60 probes per provider per day
@@ -93,10 +89,6 @@ fallback with a model the fallback provider actually has, so a HermesFLLM outage
 | `HERMESFLLM_COMMITTED_STALL_MS` | 90000 | no progress once the agent is receiving the stream |
 | `HERMESFLLM_TURN_CEILING_MS` | 300000 | longest turn that has sent nothing to the agent |
 | `HERMESFLLM_RUNAWAY_RATIO` | 20 | compression ratio of the last 8KB that counts as a loop |
-| `HERMESFLLM_SHADOW` | off | `1` sends an invisible copy of sampled agent turns to FreeLLMAPI and compares the answers |
-| `HERMESFLLM_SHADOW_RATE` | 0.1 | share of tool-bearing turns copied (0-1) |
-| `HERMESFLLM_SHADOW_URL` | `http://127.0.0.1:3001` | where FreeLLMAPI listens; it gets the agent's own `Authorization` header |
-| `HERMESFLLM_SHADOW_TIMEOUT_MS` | 300000 | how long the copy may take before it counts as an error |
 | `HERMESFLLM_CURATION_INTERVAL_MS` | 600000 | curation round interval |
 | `HERMESFLLM_CURATION_MAX_PROBES` | 4 | probes per round |
 | `HERMESFLLM_CURATION_DAILY_CAP` | 60 | probes per provider per day |

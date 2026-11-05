@@ -5,7 +5,8 @@
 //
 // One row per sampled agent turn: the outcome the agent got from HermesFLLM (h_*) and the
 // outcome the same request got from FreeLLMAPI, sent as an invisible copy (f_*). Both are
-// judged by the same rules (lib/hermes-shadow.ts).
+// judged by the same rules. The comparison was removed in v0.12.1; the table stays so existing
+// databases keep a consistent migration history, and nothing writes to it any more.
 
 import type { Db } from '../types.js';
 

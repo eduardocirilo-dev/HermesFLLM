@@ -6,7 +6,6 @@ import { CURATION_DAILY_CAP_PER_PLATFORM, CURATION_INTERVAL_MS, CURATION_MAX_PRO
 import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
 import { governorConfig } from '../lib/hermes-governor.js';
-import { shadowStats } from '../lib/hermes-shadow.js';
 import { DEFAULT_DEMOTION_FACTOR, getDemotions, setDemotion } from '../lib/hermes-demotions.js';
 import { qualityByModel } from '../lib/hermes-feedback.js';
 
@@ -151,7 +150,6 @@ export function buildHealthBoard(now = Date.now()) {
       const { min, max } = raceDelayBounds();
       return { enabled: isRaceEnabled(), ...raceStats(), minDelayMs: min, maxDelayMs: max };
     })(),
-    shadow: shadowStats(),
     traffic: {
       requests24h: traffic.total,
       successRate24h: traffic.total > 0 ? (traffic.ok ?? 0) / traffic.total : null,
