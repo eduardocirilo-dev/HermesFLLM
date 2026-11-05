@@ -9,6 +9,7 @@ import { contextFitStats } from '../lib/hermes-context-fit.js';
 import { governorConfig } from '../lib/hermes-governor.js';
 import { DEFAULT_DEMOTION_FACTOR, getDemotions, setDemotion } from '../lib/hermes-demotions.js';
 import { qualityByModel } from '../lib/hermes-feedback.js';
+import { PHASES, MIN_SAMPLES as PHASE_MIN_SAMPLES, phaseFactors, phaseRoutingStats, phaseTable } from '../lib/hermes-phase.js';
 
 // HermesFLLM model health board: what the router prefers right now, what curation
 // excluded and why, and how many broken agent turns the Agent Guard caught.
@@ -256,6 +257,25 @@ curationRouter.put('/demotions', (req: Request, res: Response) => {
 });
 
 // What the agent did with each model's answers, as reported by the Hermes plugin (7 days).
+/** Quality per model, with each model's tool success and routing multiplier by agent phase. */
+export function buildQuality(days = 7) {
+  const quality = qualityByModel(days);
+  const table = phaseTable(days);
+  const factors = new Map(PHASES.map(p => [p, phaseFactors(table, p)]));
+  return {
+    ...quality,
+    models: quality.models.map(m => ({
+      ...m,
+      phases: PHASES.flatMap(phase => {
+        const c = table.get(m.modelId)?.get(phase);
+        if (!c || c.calls < PHASE_MIN_SAMPLES) return [];
+        return [{ phase, calls: c.calls, errors: c.errors, rate: (c.calls - c.errors) / c.calls, factor: factors.get(phase)?.get(m.modelId) ?? 1 }];
+      }),
+    })),
+    phaseRouting: phaseRoutingStats(),
+  };
+}
+
 curationRouter.get('/quality', (_req: Request, res: Response) => {
-  res.json(qualityByModel(7));
+  res.json(buildQuality(7));
 });
