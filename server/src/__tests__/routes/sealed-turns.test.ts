@@ -323,4 +323,35 @@ describe('sealed turns', () => {
     const { seal } = await post(app, { ...turn(), tools: undefined }, key);
     expect(seal).toBeNull();
   });
+
+  it('reasoning carried on a held text chunk is kept in the stream', async () => {
+    streamChatCompletion.mockImplementationOnce(script(
+      { choices: [{ delta: { reasoning_content: 'weighing the options ', content: 'Let me look. ' } }] },
+      call('Bash', '{"command":"ls"}'),
+      finish('tool_calls'),
+    ));
+    const { raw } = await post(app, turn(), key);
+    expect(raw).toContain('weighing the options');
+    expect(read(raw).toolCalls).toHaveLength(1);
+  });
+
+  it('a heartbeat after a minute of silence does not release a held turn, so it fails over invisibly', async () => {
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    streamChatCompletion
+      .mockImplementationOnce(async function* (_k: string, _m: unknown, _id: string, opts: { signal?: AbortSignal }) {
+        yield prose('Let me check. ');
+        skew += 61_000;
+        yield { choices: [{ index: 0, delta: {} }] }; // a heartbeat: produces nothing
+        await waitAbort(opts.signal);
+      })
+      .mockImplementation(script(call('Bash', '{"command":"ls"}'), finish('tool_calls')));
+    const { raw, seal } = await post(app, turn(), key);
+    const out = read(raw);
+    expect(seal).toBe('sealed; 1 rescued');
+    expect(out.streamError).toBe(false);
+    expect(out.content).toBe('');
+    expect(out.toolCalls).toHaveLength(1);
+  });
 });
