@@ -3,6 +3,8 @@ import { governorConfig, TurnGovernor } from '../lib/hermes-governor.js';
 import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
 import { fitContext } from '../lib/hermes-context-fit.js';
 import { isSessionAnchorEnabled, noteSessionModel, sessionAnchor } from '../lib/hermes-session.js';
+import { isHermesTraffic, noteSealDelivery, noteSealRescue, sealConfig, sealHeader, sealRescueKind, sealVerdict, SEALED_MARK } from '../lib/hermes-seal.js';
+import { classifyClientAgent } from '../lib/client-classifier.js';
 import { breaksStickiness, derivePhase, isPhaseRoutingEnabled, notePhase } from '../lib/hermes-phase.js';
 import crypto from 'crypto';
 import { Router } from 'express';
@@ -30,12 +32,12 @@ import { sanitizeProviderErrorMessage } from '../lib/error-redaction.js';
 import { rescueInlineToolCalls, startsWithDialectMarker, couldBecomeDialectMarker, containsDialectMarker } from '../lib/tool-call-rescue.js';
 import { getContextHandoffMode, recordIncomingMessages, maybeInjectContextHandoff, recordSuccessfulModel, hasPriorModel, HANDOFF_MAX_TOKENS } from '../services/context-handoff.js';
 import { isFusionModel, runFusion, fusionConfigSchema, FusionError, FUSION_MODEL_ID } from '../services/fusion.js';
-import { isRetryableError, isPaymentRequiredError, isModelNotFoundError, isModelAccessForbiddenError, isClientAbortError, newClientAbortError, newHedgeAbortError, isUpstreamClassificationOutput } from '../lib/error-classify.js';
+import { isRetryableError, isKeyAuthError, isPaymentRequiredError, isModelNotFoundError, isModelAccessForbiddenError, isClientAbortError, newClientAbortError, newHedgeAbortError, isUpstreamClassificationOutput } from '../lib/error-classify.js';
 import { logRequest } from '../lib/request-log.js';
 import { observeServedModel } from '../lib/served-model.js';
 import { parseCacheDirective, cacheActive, isCacheableTemperature, computeCacheKey, getCachedResponse, storeCachedResponse, getCachedStreamResponse, storeCachedStreamResponse, STREAM_CACHE_MAX_BYTES } from '../services/cache.js';
 import { normalizeIdempotencyKey, hashIdempotencyKey, computeIdempotencyFingerprint, lookupIdempotencyReplay, storeIdempotencyResult } from '../services/idempotency.js';
-import { runFallbackLoop, newFallbackState, fallbackRoutingTokens, recordUpstreamSuccess, exhaustedRetryError, setFallbackHeaders, exhaustionErrorPayload, setExhaustionHeaders, type AttemptRecord, REASONING_HOLD_MAX_MS } from '../lib/fallback-loop.js';
+import { runFallbackLoop, newFallbackState, fallbackRoutingTokens, recordUpstreamSuccess, recordRetryableFailure, exhaustedRetryError, setFallbackHeaders, exhaustionErrorPayload, setExhaustionHeaders, type AttemptRecord, REASONING_HOLD_MAX_MS } from '../lib/fallback-loop.js';
 import { routedViaValue, safeHeaderValue } from '../lib/header-value.js';
 import { applyTokenBudget, tokenBudgetMessage } from '../lib/guardrails.js';
 import { samplingParamSchemaFields, pickSamplingParams, supportedParametersForPlatforms } from '../lib/sampling-params.js';
@@ -2572,6 +2574,14 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     if (!res.headersSent) res.setHeader('X-HermesFLLM-Phase', broke ? `${agentPhase}; sticky model set aside` : agentPhase);
   }
 
+  // HermesFLLM sealed turns (lib/hermes-seal.ts): an agent turn's prose is held until the turn's
+  // shape is known, so a model that talks before it acts can still fail over invisibly. Hermes
+  // traffic only; JSON mode already holds everything and keep-alive pings commit the response.
+  const sealCfg = stream && wantsTools && pinnedModelId == null && groupChain == null && !samplingParams.response_format
+    && streamKeepaliveMs() <= 0 && isHermesTraffic(requestedModel, classifyClientAgent(req)) ? sealConfig() : null;
+  // Failures inside the seal on earlier attempts of this request: half-turns Hermes never saw.
+  let sealRescues = 0;
+
   await runFallbackLoop({
     maxRetries: MAX_RETRIES,
     state,
@@ -2668,12 +2678,21 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = undefined; }
         };
 
+        // HermesFLLM sealed turns: `wouldHaveCommitted` = the old rule would already have
+        // streamed this attempt's prose (or, past 15s, its reasoning). Until a release, a failure
+        // can still fail over invisibly.
+        const sealed = sealCfg != null;
+        let wouldHaveCommitted = false;
+        let toolCallStarted = false;
+        let sealRelease: 'answer' | 'valve' | null = null;
+
         // Hold-window state: 'undecided' until the first text either matches
         // a dialect marker (→ 'dialect': buffer everything, rescue at end),
         // carries a structured-output request (→ 'json': buffer everything,
         // enforce JSON at end) or provably cannot (→ 'passthrough': flush and
         // stream normally).
-        let mode: 'undecided' | 'passthrough' | 'dialect' | 'json' = 'undecided';
+        // 'sealed' (HermesFLLM): prose the old rule would have streamed, held until the turn's shape is known.
+        let mode: 'undecided' | 'passthrough' | 'dialect' | 'json' | 'sealed' = 'undecided';
         let heldText = '';
         const preamble: unknown[] = []; // role-only chunks held until flush
         const toolCallAcc = new Map<number, { id?: string; name: string; args: string }>();
@@ -2718,6 +2737,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           res.setHeader('Connection', 'keep-alive');
           res.setHeader('X-Routed-Via', routedViaValue(route.platform, route.modelId));
           res.setHeader('X-FreeLLM-Cache', cacheKey ? 'MISS' : 'OFF');
+          if (sealCfg) res.setHeader('X-HermesFLLM-Seal', sealHeader(sealRelease, sealRescues));
           setFallbackHeaders(res, attempt, attemptLog);
           headersSentEarly = true;
         };
@@ -2750,6 +2770,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           const frame = `data: ${JSON.stringify(c)}\n\n`;
           collectFrame(frame);
           res.write(frame);
+        };
+        // HermesFLLM sealed turns: commit a held turn and stream from here on, the old way.
+        const releaseSeal = (how: 'answer' | 'valve') => {
+          sealRelease = how;
+          if (mode === 'sealed') mode = 'passthrough';
+          flushHeaders();
+          if (mode === 'passthrough' && heldText.length > 0) {
+            writeChunk(mkChunk({ content: heldText }, null));
+            heldText = '';
+          }
         };
 
         // #1642: optional heartbeat for the silent reasoning window. A bare
@@ -2815,6 +2845,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
                 error: sanitizeProviderErrorMessage(String(msg)),
               });
               logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, `in-band error frame: ${sanitizeProviderErrorMessage(String(msg))}`, ttfbMs, pinnedModelId, null, 'http', failureAttributionFor({ message: String(msg) }));
+              // HermesFLLM sealed turns: book it, so Hermes' retry goes to another model.
+              if (sealed) {
+                const inBand = new Error(`in-band provider error from ${route.displayName}: ${msg}`);
+                if (isRetryableError(inBand)) recordRetryableFailure(route, inBand, state);
+              }
               return 'committed';
             }
 
@@ -2877,6 +2912,19 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
                 .map((tc: any) => `${tc.function?.name ?? ''}${tc.function?.arguments ?? ''}`).join('');
               governor.progress(text + reasoning + toolDelta);
             }
+            if (sealed) {
+              if ((choice.delta?.tool_calls?.length ?? 0) > 0) toolCallStarted = true;
+              // A sealed attempt that produces is alive: the retry-budget hedge must not cancel it
+              // (the old rule disarmed it at the commit, which the seal now postpones).
+              if (firstTokenNow) ctx.disarmHedge();
+              // The valve: a turn still producing after maxMs is released, so the uncommitted
+              // ceiling never cuts a healthy one. Only for what the old rule would already have
+              // streamed; a stalled turn never gets here.
+              if (wouldHaveCommitted && !headerSent && (mode === 'sealed' || mode === 'undecided')
+                && sealVerdict({ heldChars: heldText.length, toolCallStarted, elapsedMs: Date.now() - attemptStart }, sealCfg) === 'valve') {
+                releaseSeal('valve');
+              }
+            }
 
             // #764: ttfb = first token of ANY kind, not just visible content —
             // reasoning models stream thinking long before the first answer
@@ -2896,7 +2944,12 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
               if (reasoning.length > 0) totalOutputTokens += Math.ceil(reasoning.length / 4);
               // #1642: long reasoning with nothing sent yet: commit, then stream it live.
               // Not for response_format: json mode keeps its free failover (#933).
-              if (reasoning.length > 0 && !headerSent && !samplingParams.response_format && Date.now() - attemptStart >= REASONING_HOLD_MAX_MS) flushHeaders();
+              // HermesFLLM sealed turns: Hermes waits up to 900s for a local provider, so its
+              // reasoning stays held (until the valve) and a stall can still fail over invisibly.
+              if (reasoning.length > 0 && !headerSent && !samplingParams.response_format && Date.now() - attemptStart >= REASONING_HOLD_MAX_MS) {
+                if (!sealed) flushHeaders();
+                else if (mode === 'undecided') wouldHaveCommitted = true;
+              }
               if (choice.delta && Object.keys(choice.delta).some(k => k !== 'content' && k !== 'tool_calls' && choice.delta[k] != null)) {
                 // `usage: undefined` (dropped by JSON.stringify): it was held
                 // above and is re-emitted once, after our finish chunk.
@@ -2920,6 +2973,13 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
 
             heldText += text;
             if (mode === 'dialect' || mode === 'json') continue;
+            if (mode === 'sealed') {
+              // An inline tool call written after the prose: hold everything and rescue it at the end.
+              if (containsDialectMarker(heldText)) { mode = 'dialect'; continue; }
+              const verdict = sealVerdict({ heldChars: heldText.length, toolCallStarted, elapsedMs: Date.now() - attemptStart }, sealCfg!);
+              if (verdict !== 'hold') releaseSeal(verdict);
+              continue;
+            }
 
             const probe = heldText.trimStart();
             if (wantsTools && startsWithDialectMarker(probe)) {
@@ -2933,10 +2993,22 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
               // the client asked for machine-readable output, not an essay.
               mode = 'json';
             } else if (!wantsTools || !couldBecomeDialectMarker(probe) || probe.length > 256) {
-              mode = 'passthrough';
-              flushHeaders();
-              writeChunk(mkChunk({ content: heldText }, null));
-              heldText = '';
+              if (sealed && !headerSent) {
+                // HermesFLLM sealed turns: the old rule commits here. Hold the prose instead.
+                mode = 'sealed';
+                wouldHaveCommitted = true;
+                if (containsDialectMarker(heldText)) {
+                  mode = 'dialect';
+                } else {
+                  const verdict = sealVerdict({ heldChars: heldText.length, toolCallStarted, elapsedMs: Date.now() - attemptStart }, sealCfg!);
+                  if (verdict !== 'hold') releaseSeal(verdict);
+                }
+              } else {
+                mode = 'passthrough';
+                flushHeaders();
+                writeChunk(mkChunk({ content: heldText }, null));
+                heldText = '';
+              }
             }
             // else: still a strict prefix of a marker — keep holding.
           }
@@ -2964,7 +3036,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // model's private syntax. Parse it into structured calls or treat
           // the turn as dead (headers were never sent in dialect mode, so
           // failing over is free).
-          if (wantsTools && (mode === 'dialect' || (mode === 'undecided' && heldText.length > 0 && containsDialectMarker(heldText)))) {
+          if (wantsTools && (mode === 'dialect' || ((mode === 'undecided' || mode === 'sealed') && heldText.length > 0 && containsDialectMarker(heldText)))) {
             const rescue = rescueInlineToolCalls(heldText, new Set((tools ?? []).map(t => t.function.name)));
             if (rescue.detected) {
               if (!rescue.calls) throw new Error(`unparseable inline tool-call dialect from ${route.displayName}: ${heldText.slice(0, 120)}`);
@@ -2999,9 +3071,17 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           }
           // Prose already flushed (passthrough): too late to fail over, so drop what
           // the agent could not parse rather than forward it.
+          // HermesFLLM sealed turns: a released Hermes turn instead ends with a retryable
+          // stream_error (booked below), so Hermes retries on another model rather than reading
+          // the prose as a final answer.
           if (agentGuard && mode === 'passthrough') {
-            for (let i = completedCalls.length - 1; i >= 0; i--) {
-              if (agentGuardReasons([completedCalls[i]], tools).length > 0) completedCalls.splice(i, 1);
+            if (sealed) {
+              const bad = agentGuardReasons(completedCalls, tools);
+              if (bad.length > 0) throw agentGuardError(route.displayName, bad);
+            } else {
+              for (let i = completedCalls.length - 1; i >= 0; i--) {
+                if (agentGuardReasons([completedCalls[i]], tools).length > 0) completedCalls.splice(i, 1);
+              }
             }
           }
 
@@ -3119,6 +3199,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           collectFrame(doneFrame);
           res.write(doneFrame);
           res.end();
+          if (sealed) noteSealDelivery(sealRelease ?? 'whole', wouldHaveCommitted);
 
           const upstreamUsage = (usageChunk as { usage?: TokenUsage } | null)?.usage;
           const inputTokens = upstreamUsage?.prompt_tokens ?? estimatedPromptTokens;
@@ -3177,9 +3258,19 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           // Lost the first-token race: a rival is answering, so leave quietly (nothing was written).
           if (ctx.raceSignal?.aborted && !(headerSent || headersSentEarly)) throw raceLostError();
           if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = undefined; }
+          // HermesFLLM sealed turns: a failure the old rule would have shown to the agent (its prose
+          // or reasoning was already held) fails over invisibly; mark it so the board can count it.
+          const sealTag = (err: any) => {
+            if (sealed && wouldHaveCommitted && err && !err.sealRescue && (isRetryableError(err) || isKeyAuthError(err))) {
+              err.sealRescue = sealRescueKind(err);
+              noteSealRescue(err.sealRescue);
+              sealRescues++;
+            }
+            return err;
+          };
           // Our own deadline fired before anything was committed: fail over to the next model.
           if (deadlineAbort.signal.aborted && !(headerSent || headersSentEarly)) {
-            throw deadlineAbort.signal.reason instanceof Error ? deadlineAbort.signal.reason : agentDeadlineError(route.displayName, deadlineMs);
+            throw sealTag(deadlineAbort.signal.reason instanceof Error ? deadlineAbort.signal.reason : agentDeadlineError(route.displayName, deadlineMs));
           }
           // Turn Governor tripped after the commit: log the real reason, end the stream cleanly.
           if (governor?.hasTripped && deadlineAbort.signal.reason instanceof Error) streamErr = deadlineAbort.signal.reason;
@@ -3203,13 +3294,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
               error: sanitizeProviderErrorMessage(streamErr.message),
             });
             logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, sanitizeProviderErrorMessage(streamErr.message), ttfbMs, pinnedModelId, null, 'http', failureAttributionFor(streamErr));
+            // HermesFLLM sealed turns: book the failure like a pre-commit one (cooldown, failure
+            // window, urgent probe), so Hermes' retry goes to another model instead of back to this one.
+            if (sealed && isRetryableError(streamErr)) recordRetryableFailure(route, streamErr, state);
             return 'committed';
           }
           // Headers never sent — bubble to the shared loop, which cooldowns this
           // model+key and tries the next one. Covers upstream HTTP errors, in-band
           // error frames, abrupt EOF, stalls, empty completions, and unparseable
           // dialect turns alike.
-          throw streamErr;
+          throw sealTag(streamErr);
         } finally {
           // #1642: this attempt is over whichever path it left by — the
           // keep-alive interval must not outlive it.
@@ -3456,7 +3550,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     },
     logFailure: (route, err, attempt) => {
       const latency = Date.now() - start;
-      const safeError = sanitizeProviderErrorMessage(err.message);
+      // HermesFLLM sealed turns: a failure Hermes never saw ends in ' [sealed]' (counted on the board).
+      const safeError = sanitizeProviderErrorMessage(err.message) + (err?.sealRescue ? SEALED_MARK : '');
       traceRouteEvent('Proxy', {
         event: 'fail',
         requestId: requestGroupId,
