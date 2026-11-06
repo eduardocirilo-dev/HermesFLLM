@@ -2912,6 +2912,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
                 .map((tc: any) => `${tc.function?.name ?? ''}${tc.function?.arguments ?? ''}`).join('');
               governor.progress(text + reasoning + toolDelta);
             }
+            // The governor (or the deadline) can trip synchronously on this very chunk. Stop here, so
+            // frames already in hand cannot release a seal for an attempt that has been cancelled.
+            if (deadlineAbort.signal.aborted) throw deadlineAbort.signal.reason;
             if (sealed) {
               if ((choice.delta?.tool_calls?.length ?? 0) > 0) toolCallStarted = true;
               // A sealed attempt that produces is alive: the retry-budget hedge must not cancel it
@@ -2920,7 +2923,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
               // The valve: a turn still producing after maxMs is released, so the uncommitted
               // ceiling never cuts a healthy one. Only for what the old rule would already have
               // streamed; a stalled turn never gets here.
-              if (wouldHaveCommitted && !headerSent && (mode === 'sealed' || mode === 'undecided')
+              if (firstTokenNow && wouldHaveCommitted && !headerSent && (mode === 'sealed' || mode === 'undecided')
                 && sealVerdict({ heldChars: heldText.length, toolCallStarted, elapsedMs: Date.now() - attemptStart }, sealCfg) === 'valve') {
                 releaseSeal('valve');
               }
@@ -2972,6 +2975,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             }
 
             heldText += text;
+            if (sealed && reasoning.length > 0) {
+              // Held text must not drop the reasoning on the same chunk: keep it as a content-free frame.
+              const reasoningOnly = { ...anyChunk, usage: undefined, choices: [{ ...choice, delta: { ...choice.delta, content: undefined, tool_calls: undefined }, finish_reason: null }] };
+              if (headerSent) writeChunk(reasoningOnly); else preamble.push(reasoningOnly);
+            }
             if (mode === 'dialect' || mode === 'json') continue;
             if (mode === 'sealed') {
               // An inline tool call written after the prose: hold everything and rescue it at the end.
@@ -3039,7 +3047,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           if (wantsTools && (mode === 'dialect' || ((mode === 'undecided' || mode === 'sealed') && heldText.length > 0 && containsDialectMarker(heldText)))) {
             const rescue = rescueInlineToolCalls(heldText, new Set((tools ?? []).map(t => t.function.name)));
             if (rescue.detected) {
-              if (!rescue.calls) throw new Error(`unparseable inline tool-call dialect from ${route.displayName}: ${heldText.slice(0, 120)}`);
+              // The message carries no model text: the loop's classifiers read it by substring, and a
+              // prose sentence that happens to contain words like "rate limit" would bench a healthy model.
+              if (!rescue.calls) throw new Error(`unparseable inline tool-call dialect from ${route.displayName}`);
               let rescuedIds = 0;
               for (const c of rescue.calls) {
                 completedCalls.push({ id: `call_rescued_${++rescuedIds}`, type: 'function', function: { name: c.name, arguments: repairToolArguments(c.arguments, schemas.get(c.name)) } });
