@@ -98,6 +98,8 @@ export function sealRescueKind(err: any): SealRescueKind {
 
 /** Suffix on the stored error of a failure the agent never saw, so the board can count them. */
 export const SEALED_MARK = ' [sealed]';
+/** Suffix on the stored error of a Hermes turn that failed after reaching the agent. */
+export const VISIBLE_MARK = ' [reached Hermes]';
 
 /** The X-HermesFLLM-Seal header value for the attempt that answers. */
 export function sealHeader(release: 'answer' | 'valve' | null, rescued: number): string {

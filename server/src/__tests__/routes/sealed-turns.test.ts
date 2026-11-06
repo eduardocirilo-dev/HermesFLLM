@@ -354,4 +354,20 @@ describe('sealed turns', () => {
     expect(out.content).toBe('');
     expect(out.toolCalls).toHaveLength(1);
   });
+
+  it('after a release, a failure cools every key of that model, so a sibling key cannot serve Hermes the same model again', async () => {
+    const { encrypted, iv, authTag } = encrypt('second-key');
+    const second = getDb().prepare(`INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+                     VALUES ('groq', 'second', ?, ?, ?, 'healthy', 1)`).run(encrypted, iv, authTag).lastInsertRowid;
+    try {
+      streamChatCompletion.mockImplementationOnce(script(prose(LONG), call('read_terminal', '{}'), finish('tool_calls')));
+      await post(app, turn(), key);
+      const failed = calledModels()[0];
+      const keys = (getDb().prepare('SELECT COUNT(DISTINCT key_id) AS n FROM rate_limit_cooldowns WHERE model_id = ?').get(failed) as { n: number }).n;
+      expect(keys).toBe(2);
+      expect(getDb().prepare(`SELECT error FROM requests WHERE status = 'error'`).get()).toMatchObject({ error: expect.stringMatching(/\[reached Hermes\]$/) });
+    } finally {
+      getDb().prepare('DELETE FROM api_keys WHERE id = ?').run(second);
+    }
+  });
 });
