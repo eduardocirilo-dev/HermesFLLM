@@ -3,7 +3,8 @@ import { governorConfig, TurnGovernor } from '../lib/hermes-governor.js';
 import { isRaceEnabled, raceDelayMs, raceLostError } from '../lib/hermes-race.js';
 import { fitContext } from '../lib/hermes-context-fit.js';
 import { isSessionAnchorEnabled, noteSessionModel, sessionAnchor } from '../lib/hermes-session.js';
-import { isHermesTraffic, noteSealDelivery, noteSealRescue, sealConfig, sealHeader, sealRescueKind, sealVerdict, SEALED_MARK } from '../lib/hermes-seal.js';
+import { isHermesTraffic, noteSealDelivery, noteSealRescue, sealConfig, sealHeader, sealRescueKind, sealVerdict, SEALED_MARK, VISIBLE_MARK } from '../lib/hermes-seal.js';
+import { setCooldown } from '../services/ratelimit.js';
 import { classifyClientAgent } from '../lib/client-classifier.js';
 import { breaksStickiness, derivePhase, isPhaseRoutingEnabled, notePhase } from '../lib/hermes-phase.js';
 import crypto from 'crypto';
@@ -11,7 +12,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { ChatMessage, ChatToolCall, TokenUsage } from '@freellmapi/shared/types.js';
-import { type RouteResult, type ResolvedChain, type ChainRow, routeRequest, resolveRoutingChain, resolveModelGroupCandidates, resolveStickyPreference, hasEnabledVisionModel, hasEnabledToolsModel, routingReserveTokens, failureAttributionFor } from '../services/router.js';
+import { type RouteResult, type ResolvedChain, type ChainRow, routeRequest, resolveRoutingChain, resolveModelGroupCandidates, resolveStickyPreference, hasEnabledVisionModel, hasEnabledToolsModel, routingReserveTokens, failureAttributionFor, routableKeyIdsForModel } from '../services/router.js';
 import { secondsUntilNextMonth, nextMonthResetAt } from '../services/key-budget.js';
 import { runEmbeddings, EmbeddingsError } from '../services/embeddings.js';
 import { runRerank, RerankError, rerankRetryAfterSec } from '../services/rerank.js';
@@ -2581,6 +2582,13 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     && streamKeepaliveMs() <= 0 && isHermesTraffic(requestedModel, classifyClientAgent(req)) ? sealConfig() : null;
   // Failures inside the seal on earlier attempts of this request: half-turns Hermes never saw.
   let sealRescues = 0;
+  // A failure after the commit is model behaviour, not one key's: cool every key of that model
+  // briefly, or Hermes' retry would reach the same model through a sibling key.
+  const benchModelKeys = (route: RouteResult) => {
+    for (const k of routableKeyIdsForModel(route.modelDbId)) {
+      if (k !== route.keyId) setCooldown(route.platform, route.modelId, k, 60_000, 'heuristic');
+    }
+  };
 
   await runFallbackLoop({
     maxRetries: MAX_RETRIES,
@@ -2844,11 +2852,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
                 latencyMs: Date.now() - start,
                 error: sanitizeProviderErrorMessage(String(msg)),
               });
-              logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, `in-band error frame: ${sanitizeProviderErrorMessage(String(msg))}`, ttfbMs, pinnedModelId, null, 'http', failureAttributionFor({ message: String(msg) }));
+              logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, `in-band error frame: ${sanitizeProviderErrorMessage(String(msg))}${sealed ? VISIBLE_MARK : ''}`, ttfbMs, pinnedModelId, null, 'http', failureAttributionFor({ message: String(msg) }));
               // HermesFLLM sealed turns: book it, so Hermes' retry goes to another model.
               if (sealed) {
                 const inBand = new Error(`in-band provider error from ${route.displayName}: ${msg}`);
-                if (isRetryableError(inBand)) recordRetryableFailure(route, inBand, state);
+                if (isRetryableError(inBand)) { recordRetryableFailure(route, inBand, state); benchModelKeys(route); }
               }
               return 'committed';
             }
@@ -3020,6 +3028,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             }
             // else: still a strict prefix of a marker — keep holding.
           }
+
+          // HermesFLLM sealed turns: Hermes hung up. Nothing was or will be delivered, and a half
+          // tool call is not the model's fault: leave through the client-abort path, booking nothing.
+          if (sealed && clientGone) throw newClientAbortError();
 
           // — Stream ended cleanly (provider saw [DONE] or a finish_reason) —
 
@@ -3303,10 +3315,13 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
               latencyMs: Date.now() - start,
               error: sanitizeProviderErrorMessage(streamErr.message),
             });
-            logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, sanitizeProviderErrorMessage(streamErr.message), ttfbMs, pinnedModelId, null, 'http', failureAttributionFor(streamErr));
+            logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, sanitizeProviderErrorMessage(streamErr.message) + (sealed ? VISIBLE_MARK : ''), ttfbMs, pinnedModelId, null, 'http', failureAttributionFor(streamErr));
             // HermesFLLM sealed turns: book the failure like a pre-commit one (cooldown, failure
             // window, urgent probe), so Hermes' retry goes to another model instead of back to this one.
-            if (sealed && isRetryableError(streamErr)) recordRetryableFailure(route, streamErr, state);
+            if (sealed && isRetryableError(streamErr)) {
+              recordRetryableFailure(route, streamErr, state);
+              benchModelKeys(route);
+            }
             return 'committed';
           }
           // Headers never sent — bubble to the shared loop, which cooldowns this

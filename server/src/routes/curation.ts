@@ -55,11 +55,11 @@ export function buildSealBoard() {
     rescued24h++;
     byKind24h[sealRescueKindFromText(r.error)]++;
   }
+  // Only Hermes turns (marked when they fail after the commit), so other clients never count.
   const visible = db.prepare(`
-    SELECT SUM(r.created_at >= datetime('now', '-1 day')) AS day, COUNT(*) AS week
-      FROM requests r
-     WHERE r.status = 'error' AND r.created_at >= datetime('now', '-7 day')
-       AND EXISTS (SELECT 1 FROM request_attempts a WHERE a.request_id = r.id AND a.outcome = 'committed' AND a.model_id = r.model_id)
+    SELECT SUM(created_at >= datetime('now', '-1 day')) AS day, COUNT(*) AS week
+      FROM requests
+     WHERE status = 'error' AND error LIKE '%[reached Hermes]' AND created_at >= datetime('now', '-7 day')
   `).get() as { day: number | null; week: number | null };
   const cfg = sealConfig();
   const gov = governorConfig();

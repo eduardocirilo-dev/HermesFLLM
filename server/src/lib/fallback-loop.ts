@@ -1692,7 +1692,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
         if (!exempt && stopIfBreakerTripped()) return;
         // HermesFLLM rescue (Turn Governor / agent deadline / Agent Guard): the agent is still
         // waiting and the time went to a model that failed it, so the next hops get a fresh budget.
-        if (err?.governor === true || err?.agentDeadline === true || err?.agentGuard === true) budgetStartedAt = Date.now();
+        if (err?.governor === true || err?.agentDeadline === true || err?.agentGuard === true || err?.sealRescue) budgetStartedAt = Date.now();
         continue;
       }
       traceAttempt(classifyAttemptError(err), err);
