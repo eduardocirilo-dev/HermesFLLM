@@ -7,6 +7,7 @@ import { isAgentGuardEnabled } from '../lib/tool-validate.js';
 import { isRaceEnabled, raceDelayBounds, raceStats } from '../lib/hermes-race.js';
 import { contextFitStats } from '../lib/hermes-context-fit.js';
 import { sessionAnchorStats } from '../lib/hermes-session.js';
+import { SEAL_RESCUE_KINDS, sealConfig, sealRescueKindFromText, sealStats, type SealRescueKind } from '../lib/hermes-seal.js';
 import { governorConfig } from '../lib/hermes-governor.js';
 import { DEFAULT_DEMOTION_FACTOR, getDemotions, setDemotion } from '../lib/hermes-demotions.js';
 import { qualityByModel } from '../lib/hermes-feedback.js';
@@ -32,6 +33,49 @@ function reserve() {
                            ORDER BY julianday(last_probed_at) DESC LIMIT 1`).get(m.platform, m.model_id, m.endpoint_scope ?? '') as { status: string; last_probed_at: string } | undefined;
     return { platform: m.platform, modelId: m.model_id, name: m.display_name ?? m.model_id, lastStatus: p?.status ?? null, lastProbedAt: p?.last_probed_at ?? null };
   }).filter((x): x is NonNullable<typeof x> => x !== null);
+}
+
+/**
+ * Sealed turns (lib/hermes-seal.ts): half-turns Hermes never saw (failures inside the seal, marked
+ * ' [sealed]' in the error column) and the failures that still reached the agent (a committed
+ * attempt whose terminal row is an error). The latter has history from before the seal shipped,
+ * so the 7-day figure shows the trend.
+ */
+export function buildSealBoard() {
+  const db = getDb();
+  const sealedRows = db.prepare(`
+    SELECT error, created_at >= datetime('now', '-1 day') AS recent
+      FROM requests
+     WHERE status = 'error' AND error LIKE '%[sealed]' AND created_at >= datetime('now', '-7 day')
+  `).all() as Array<{ error: string | null; recent: number }>;
+  const byKind24h = Object.fromEntries(SEAL_RESCUE_KINDS.map(k => [k, 0])) as Record<SealRescueKind, number>;
+  let rescued24h = 0;
+  for (const r of sealedRows) {
+    if (!r.recent) continue;
+    rescued24h++;
+    byKind24h[sealRescueKindFromText(r.error)]++;
+  }
+  const visible = db.prepare(`
+    SELECT SUM(r.created_at >= datetime('now', '-1 day')) AS day, COUNT(*) AS week
+      FROM requests r
+     WHERE r.status = 'error' AND r.created_at >= datetime('now', '-7 day')
+       AND EXISTS (SELECT 1 FROM request_attempts a WHERE a.request_id = r.id AND a.outcome = 'committed' AND a.model_id = r.model_id)
+  `).get() as { day: number | null; week: number | null };
+  const cfg = sealConfig();
+  const gov = governorConfig();
+  return {
+    enabled: cfg !== null,
+    releaseChars: cfg?.releaseChars ?? null,
+    maxMs: cfg?.maxMs ?? null,
+    rescued24h,
+    rescued7d: sealedRows.length,
+    byKind24h,
+    visibleFailures24h: visible.day ?? 0,
+    visibleFailures7d: visible.week ?? 0,
+    /** What a stall caught inside the seal saves over the committed regime. */
+    stallSavingMs: gov ? Math.max(0, gov.committedStallMs - gov.stallMs) : 0,
+    sinceRestart: sealStats(),
+  };
 }
 
 export function buildHealthBoard(now = Date.now()) {
@@ -151,6 +195,7 @@ export function buildHealthBoard(now = Date.now()) {
     },
     contextFit: contextFitStats(),
     sessionAnchor: sessionAnchorStats(),
+    seal: buildSealBoard(),
     race: (() => {
       const { min, max } = raceDelayBounds();
       return { enabled: isRaceEnabled(), ...raceStats(), minDelayMs: min, maxDelayMs: max };

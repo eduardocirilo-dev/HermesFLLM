@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { ModelForensicsCard } from '@/components/model-forensics-card'
 import { AgentQualityCard } from '@/components/agent-quality-card'
+import { SealedTurnsCard, type SealBoard } from '@/components/sealed-turns-card'
 
 export type RescueKind = 'guard' | 'deadline' | 'stall' | 'runaway' | 'ceiling'
 
@@ -46,6 +47,7 @@ export interface HealthBoard {
     total24h: number
     total7d: number
   }
+  seal?: SealBoard
   sessionAnchor?: { enabled: boolean; activeSessions: number; anchored: number; escalated: number; displaced: number; returned: number; since: string }
   contextFit?: { enabled: boolean; turns: number; compacted: number; tokensSaved: number; modelsRegained: number; since: string }
   race?: { enabled: boolean; races: number; backupWins: number; primaryWins: number; bothFailed: number; winnerFailed?: number; backupWinMs: number; since: string; minDelayMs: number; maxDelayMs: number }
@@ -341,6 +343,7 @@ export default function HealthBoardPage() {
             {data.sessionAnchor && <SessionAnchorCard anchor={data.sessionAnchor} now={now} />}
           </div>
 
+          {data.seal && <SealedTurnsCard seal={data.seal} />}
 
           <AgentQualityCard />
 

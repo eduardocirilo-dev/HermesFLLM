@@ -17,6 +17,7 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
 | **Broken tool calls** | Arguments that are not valid JSON are dropped silently when streaming and passed through otherwise; calls to undeclared tools go undetected | **Agent Guard** (on by default): an unnamed call, an undeclared tool, non-object/invalid JSON arguments or a schema violation fails the turn over to another model *before* anything reaches the agent, and penalises the model |
 | **Silent / stalled models** | The time-budget hedge skips the first attempt and stops once a keep-alive is sent | **Agent deadline**: any attempt (the first included) that produces no token within 30s (text, reasoning or a tool-call fragment) is cancelled and the turn fails over invisibly; only that model is ruled out, not its whole provider. A model that has started writing, even a long tool call, is never cut by it |
 | **Waiting on a slow start** | Strictly sequential: the next model starts only after the current one fails or times out, from scratch | **First-token race** (on by default): if a model is still silent after its own usual p90 time to first token (3-15s), the next-best model starts in parallel and the first to produce a token wins; the other is cancelled before writing a byte and is not penalised. A backup that wins answers that turn only: the session keeps its original model, so a few seconds saved never hand the rest of the session to a weaker one. Fast turns never pay for a second prompt. Auto-routed `chat/completions`, streaming and not |
+| **Half-finished turns** | A tool-bearing stream commits at the model's first word. From then on a stall waits out the 90s committed rule and ends in a visible error, the failure is not booked (the agent's retry goes back to the same model), a broken tool call after prose is dropped and the turn ends with `stop` (the agent reads "I'll list the files now." as its final answer), and an inline `<tool_call>` after prose leaks out as text | **Sealed turns** (on by default, Hermes traffic): the prose and the reasoning of an agent turn are held until the turn's shape is known, so a model that talks before it acts still fails over invisibly (stall in 30s, broken or inline tool call, cut stream). A final answer starts streaming once it passes 800 characters, and a turn still producing after 60s is released. After a release a broken call ends with a retryable error instead of `stop`, and a failure is booked so Hermes' retry goes to another model. Responses carry `X-HermesFLLM-Seal`; the health board counts the half-turns kept from Hermes and the failures that still reach it |
 | **Frozen turns** | After the first token only an upstream watchdog applies: 90s without a single byte. A stream that keeps trickling or looping runs until the provider gives up (observed: 26 minutes), and by then the failover budget is spent, so the agent gets a 502 | **Turn Governor**: watches real progress (text, reasoning, tool-call arguments), not bytes. A stall (under 32 new characters in 30s before the agent receives anything, 90s after), a repetition loop (the last 8KB compressing over 20x; real output measures 2-7x) or a 5-minute silent turn fails over invisibly, or ends with a clean error the agent retries. A rescue (governor, agent deadline or an Agent Guard rejection) restarts the failover budget so the ladder still has models to try |
 | **Choosing a model for the job** | Task type is `code` or `chat`; every request with tools is `code`, so editing a file, running a shell command, reading the repository and browsing the web count as the same job | **Phase routing** (on by default): the agent's current phase (edit, shell, explore, web) is read from its latest tool calls in the turn, and each model's tool success rate in that phase, from the Hermes plugin's feedback over 7 days, multiplies its routing score (bounded 0.6-1.15, shrunk toward the phase average, neutral until a model has 5 judged calls in that phase and the phase has 20). A session keeps its model unless that model is markedly bad at the current phase (multiplier at or below 0.75). Tags the response with `X-HermesFLLM-Phase`; the quality card shows each model's success per phase and how much it shifts routing. It reorders close candidates; it does not overturn a large intelligence gap |
 | **Staying on one model** | Sticky sessions remember the *last* model that answered: one failover to a smaller model and the rest of the session stays on it | **Session anchor** (on by default): an agent session keeps the strongest model that has served it. After a failover to a weaker one, the next turn goes back to the anchor as soon as it can serve; failovers try models of the anchor's size tier or above first and drop a tier only when nothing at it can serve; a stronger model that serves the session becomes the new anchor. Responses carry `X-HermesFLLM-Session-Anchor`; the health board counts returns, escalations and turns a weaker model had to answer |
@@ -33,15 +34,20 @@ session. HermesFLLM keeps the router and changes how it decides, verifies and re
 
 ## Honest limits
 
-- **Quality is measured, not yet acted on.** The Hermes plugin reports which tool calls ran and which
-  turns finished, per model (health board); routing does not use that signal yet.
+- **Quality only starts to steer routing once there is data.** The Hermes plugin reports which tool
+  calls ran and which turns finished, per model. Phase routing uses tool success per phase, but only
+  after 5 judged calls per model and phase (20 per phase), so a fresh install routes as before.
 - **The model catalog still comes from FreeLLMAPI.** Without a FreeLLMAPI Premium key, an install
   gets the monthly catalog snapshot. An open HermesFLLM catalog is planned.
 - **Probes spend free quota.** Up to 4 probes every 10 minutes (each up to 3 requests), capped at 60 probes per provider per day
   (`HERMESFLLM_CURATION_*`).
 - **Once output has reached the agent**, a stalled or looping stream can only be ended cleanly (the
-  agent sees an error and retries), not switched invisibly. The latency ceiling demotes such models
-  after a few slow answers.
+  agent sees an error and retries), not switched invisibly. For Hermes that now happens only after a
+  release (a final answer past 800 characters, or a turn still producing after 60s); the failure is
+  booked so the retry goes to another model. Other clients still commit at the first word.
+- **Sealed turns trade live text for safety.** Hermes sees a turn's preamble (and long reasoning)
+  when the turn is ready, not as it is typed. Total turn time does not change; tune it with
+  `HERMESFLLM_SEAL_RELEASE_CHARS` or turn it off with `HERMESFLLM_SEAL=0`.
 - **The loop detector is a heuristic.** It needs 8KB of output compressing over 20x; an agent that
   deliberately writes a huge, highly repetitive file (for example thousands of identical lines)
   would be cut. `HERMESFLLM_RUNAWAY_RATIO` raises the bar, `HERMESFLLM_GOVERNOR=0` turns it off.
@@ -90,6 +96,9 @@ fallback with a model the fallback provider actually has, so a HermesFLLM outage
 | `HERMESFLLM_SESSION_ANCHOR` | on | `0` disables the session anchor |
 | `HERMESFLLM_CONTEXT_FIT` | on | `0` disables context fit |
 | `HERMESFLLM_MAX_LATENCY_MS` | 60000 | latency ceiling |
+| `HERMESFLLM_SEAL` | on | `0` disables sealed turns |
+| `HERMESFLLM_SEAL_RELEASE_CHARS` | 800 | characters of text with no tool call after which a final answer starts streaming |
+| `HERMESFLLM_SEAL_MAX_MS` | 60000 | a sealed turn still producing after this long is released |
 | `HERMESFLLM_GOVERNOR` | on | `0` disables the Turn Governor |
 | `HERMESFLLM_STALL_MS` | 30000 | no progress after the first token, before the agent receives anything |
 | `HERMESFLLM_COMMITTED_STALL_MS` | 90000 | no progress once the agent is receiving the stream |
